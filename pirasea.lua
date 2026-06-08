@@ -135,13 +135,7 @@ local DEFAULTS = {
     autoClashSmart=true, autoClashSmartMinLen=0.6,
     -- Auto-mine (velocity-hover above nearest OreRoot + native pickaxe Tool.Activate) — same hover physics as auto-farm, separate movers in state.mine
     autoMineOn=false, autoMineHeight=1, autoMineOffsetX=0, autoMineOffsetZ=0, autoMineRange=10000, autoMineFilter="", autoMineSwingInterval=0.3, autoMineStuckTime=25,  -- X/Y/Z offset from ore; switch on inventory drop, stuck-timer is only a backstop
-    -- Auto-craft: fires ReplicatedStorage.comms.CraftRequest:InvokeServer(name) on a timer.
-    -- Goal is to grind ProfessionPoints for Hard Worker I (+1.25x training).
-    autoCraftOn=false, autoCraftItem="Copper Nail", autoCraftInterval=2.0,
-    autoSmeltOn=false, autoSmeltItem="Copper Ingot", autoSmeltInterval=0.2,  -- fast spam interval, ~5/sec
-    autoSmeltSource="Copper Ore",  -- what we consume; loop skips firing if we don't have any
-    autoSmeltRange=20,  -- max studs from a furnace's proximity prompt to consider it ours
-    autoSmeltCooldown=3.0,  -- seconds before re-firing on the same furnace (rotates through multiple)
+    -- (auto-craft + auto-smelt state removed)
     -- Anti-AFK (idle pulse to prevent kick)
     antiAfk=true,
     -- Auto-eat
@@ -207,13 +201,6 @@ local state = {
     autoEat = {
         lastEatTime=0, eatCount=0,
     },
-    -- craft/smelt counters initialized HERE so the loops can't nil-crash if they
-    -- spawn before the Combat-tab UI runs (reviewer caught this race).  The UI
-    -- still overwrites these tables to attach status labels, which is fine.
-    craft = {ok=0, fail=0, last="(idle)"},
-    smelt = {ok=0, fail=0, skipped=0, last="(idle)", consecutiveFails=0,
-             furnaceCooldowns = {}},   -- strong keys; furnaces are reasonably static in count
-
     panic=false,
     logFilter="all",  -- all/good/warn/bad/info
 }
@@ -288,7 +275,7 @@ local function loadConfig()
                        -- autoRepairOn is intentionally NOT transient: it's safe (only patches your
                        -- own hull) and nice to keep ON across reloads / zone-hops, per request.
                        watchdogOn=true, panic=true,
-                       mapOn=true, autoCraftOn=true, autoSmeltOn=true,
+                       mapOn=true,
                        -- never auto-resume these combat/destructive loops on reload
                        boatFarmOn=true, autoClashOn=true, autoRumOn=true, autoMedOn=true, autoDeleteOn=true}
     for k, v in pairs(parsed) do
@@ -1965,70 +1952,7 @@ do
 
 end
 
--- ---- AUTO-SMELT (Furnace - speed mode) ----
-Tabs.Production:Section({ Title = "AUTO-SMELT (Furnace - speed mode)" })
-
-Tabs.Production:Toggle({
-    Title = "Enable auto-smelt",
-    Value = S.autoSmeltOn,
-    Callback = function(v)
-        S.autoSmeltOn=v; pushLog(v and "good" or "warn", "🔥 auto-smelt → "..tostring(v))
-        saveConfig()
-    end,
-})
-
-Tabs.Production:Input({
-    Title = "Smelt product item name",
-    Value = S.autoSmeltItem or "Copper Ingot",
-    Placeholder = "exact item name (e.g. Copper Ingot)",
-    Callback = function(text) S.autoSmeltItem=text; saveConfig() end,
-})
-
-Tabs.Production:Slider({
-    Title = "Smelt interval (×10ms)",
-    Value = { Min = 10, Max = 200, Default = math.floor((S.autoSmeltInterval or 0.2)*1000) },
-    Step = 1,
-    Callback = function(v) S.autoSmeltInterval=v/1000; saveConfig() end,
-})
-
-Tabs.Production:Slider({
-    Title = "Furnace range (studs)",
-    Value = { Min = 10, Max = 80, Default = S.autoSmeltRange or 20 },
-    Step = 1,
-    Callback = function(v) S.autoSmeltRange=v; saveConfig() end,
-})
-
-Tabs.Production:Slider({
-    Title = "Per-furnace cooldown (s)",
-    Value = { Min = 1, Max = 15, Default = math.floor((S.autoSmeltCooldown or 3)*10)/10 },
-    Step = 0.1,
-    Callback = function(v) S.autoSmeltCooldown=v; saveConfig() end,
-})
-
--- source-item box (what we consume; e.g. "Copper Ore" for Copper Ingot smelting)
-Tabs.Production:Input({
-    Title = "Smelt source ingredient",
-    Value = S.autoSmeltSource or "Copper Ore",
-    Placeholder = "source ingredient (e.g. Copper Ore)",
-    Callback = function(text) S.autoSmeltSource=text; saveConfig() end,
-})
-
--- state.smelt is initialized at the top of the file; don't clobber it here
--- // loop below updates this paragraph
-state.winduiParagraphs.smeltStatus = Tabs.Production:Paragraph({
-    Title = "Smelt status",
-    Desc = "smelted: 0",
-})
-task.spawn(function()
-    while gui.Parent do
-        if state.winduiParagraphs.smeltStatus then
-            state.winduiParagraphs.smeltStatus:SetDesc(string.format(
-                "smelted: %d ok / %d fail / %d skip   last: %s",
-                state.smelt.ok, state.smelt.fail, state.smelt.skipped, tostring(state.smelt.last):sub(1,40)))
-        end
-        task.wait(0.5)
-    end
-end)
+-- (AUTO-SMELT section removed)
 
 
 -- ###### TAB: Survival ######
@@ -3794,171 +3718,7 @@ do
     end))
 end
 
--- ============================================================
--- AUTO-CRAFT + AUTO-SMELT LOOPS  (both fire ReplicatedStorage.comms.CraftRequest:InvokeServer)
--- Must be standing next to the right station (Workbench for crafting, Furnace for smelting)
--- AND have the ingredients in your inventory.  Server validates both; if either fails the
--- InvokeServer just no-ops.  Two independent loops so both can run in parallel.
--- ============================================================
-local function fireCraftRemote(item)
-    local craftRemote = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("CraftRequest")
-    if not craftRemote then return false, "CraftRequest remote missing" end
-    local ok, result = pcall(function() return craftRemote:InvokeServer(item) end)
-    return ok, result
-end
--- (auto-craft loop removed; fireCraftRemote() retained for use by AUTO-SMELT below)
-
--- SPEED smelt loop: short-circuits if any prerequisite fails, so we don't spam
--- CraftRequest when there's nothing to do.  Checks in order:
---   (a) we have a furnace within range (else skip, log "no furnace")
---   (b) we have the source ingredient in inventory (else skip, log "no <ingredient>")
---   (c) consecutive-fail backoff: if last 3 fires failed, pause 2s before next attempt
---   (d) only fire the prompt when we DIDN'T just fire it on the same furnace within 1s
--- Then snapshots inventory count before+after to verify the smelt actually landed.
-local function countInventoryByName(realName)
-    local n = 0
-    local target = (realName or ""):lower()
-    if target == "" then return 0 end
-    for _, it in ipairs(listInventory()) do
-        if tostring(it.realName):lower() == target then n = n + (it.stack or 1) end
-    end
-    return n
-end
-task.spawn(function()
-    while gui.Parent do
-        task.wait(S.autoSmeltInterval or 0.2)
-        if not (S.autoSmeltOn and not state.panic and type(fireproximityprompt) == "function") then
-            -- not enabled / paniced / no UNC -- silent skip
-        else
-            local hrp = getMyHRP()
-            if not hrp then
-                state.smelt.skipped = state.smelt.skipped + 1
-                state.smelt.last = "no character"
-            else
-                -- check (c): consecutive failure backoff
-                if state.smelt.consecutiveFails >= 3 then
-                    state.smelt.skipped = state.smelt.skipped + 1
-                    state.smelt.last = "backoff (3 fails)"
-                    task.wait(2)
-                    state.smelt.consecutiveFails = 0
-                else
-                    -- check (b): source ingredient available?
-                    local sourceCount = countInventoryByName(S.autoSmeltSource or "Copper Ore")
-                    if sourceCount <= 0 then
-                        state.smelt.skipped = state.smelt.skipped + 1
-                        state.smelt.last = "no "..(S.autoSmeltSource or "source")
-                    else
-                        local pos = hrp.Position
-                        local rsq = (S.autoSmeltRange or 20)^2
-                        local nowT = os.clock()
-                        local cooldown = S.autoSmeltCooldown or 3
-                        -- check (a): find nearest furnace prompt that is NOT on cooldown.
-                        -- If multiple are in range we rotate -- a busy farmer with 3 furnaces
-                        -- can keep all 3 active by cycling.
-                        local best, bestD = nil, math.huge
-                        local nearestCooledFurnace, nearestCooledLeft = nil, math.huge
-                        for _, d in ipairs(Workspace:GetDescendants()) do
-                            if d:IsA("ProximityPrompt") and d.Enabled then
-                                local p = d.Parent
-                                local pp
-                                if p and p:IsA("BasePart") then pp = p.Position
-                                elseif p and p:IsA("Model") then
-                                    local pr = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart", true)
-                                    pp = pr and pr.Position
-                                end
-                                if pp then
-                                    local matched = false
-                                    local cur = d.Parent
-                                    while cur and cur ~= Workspace do
-                                        if cur.Name:lower():find("furnace", 1, true) then matched=true; break end
-                                        cur = cur.Parent
-                                    end
-                                    if matched then
-                                        local dx,dy,dz = pp.X-pos.X, pp.Y-pos.Y, pp.Z-pos.Z
-                                        local d2 = dx*dx + dy*dy + dz*dz
-                                        if d2 < rsq then
-                                            local cdUntil = state.smelt.furnaceCooldowns[d] or 0
-                                            if nowT >= cdUntil then
-                                                -- ready: pick the closest ready one
-                                                if d2 < bestD then bestD = d2; best = d end
-                                            else
-                                                -- still cooling: track for diagnostics if no others are ready
-                                                local left = cdUntil - nowT
-                                                if left < nearestCooledLeft then
-                                                    nearestCooledLeft = left
-                                                    nearestCooledFurnace = d
-                                                end
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                        if not best then
-                            state.smelt.skipped = state.smelt.skipped + 1
-                            if nearestCooledFurnace then
-                                state.smelt.last = string.format("all furnaces cooling (next in %.1fs)", nearestCooledLeft)
-                            else
-                                state.smelt.last = "no furnace in range"
-                            end
-                        else
-                            -- fire prompt + mark cooldown
-                            pcall(fireproximityprompt, best)
-                            state.smelt.furnaceCooldowns[best] = nowT + cooldown
-
-                            -- fire smelt + verify by inventory delta
-                            local outItem = S.autoSmeltItem or "Copper Ingot"
-                            -- Poll for inventory change instead of a flat 50ms wait -- 50ms is racy
-                            -- on slow servers (false-negative -> spurious backoff).  We poll up to
-                            -- 300ms in 30ms steps and bail early if the inventory increases.
-                            local before = countInventoryByName(outItem)
-                            local ok, result = fireCraftRemote(outItem)
-                            local after = before
-                            if ok then
-                                for _=1, 10 do
-                                    task.wait(0.03)
-                                    after = countInventoryByName(outItem)
-                                    if after > before then break end
-                                end
-                            end
-                            if ok and after > before then
-                                state.smelt.ok = state.smelt.ok + 1
-                                state.smelt.last = string.format("+%d %s (have %d)", after-before, outItem, after)
-                                state.smelt.consecutiveFails = 0
-                            elseif ok then
-                                -- server accepted but inventory didn't change in 300ms -- could be
-                                -- cooldown, full inventory, or wrong recipe.  Don't count as hard fail.
-                                state.smelt.fail = state.smelt.fail + 1
-                                state.smelt.consecutiveFails = state.smelt.consecutiveFails + 1
-                                state.smelt.last = "no inv change ("..tostring(result):sub(1,20)..")"
-                            else
-                                state.smelt.fail = state.smelt.fail + 1
-                                state.smelt.consecutiveFails = state.smelt.consecutiveFails + 1
-                                state.smelt.last = "err: "..tostring(result):sub(1,30)
-                            end
-
-                            -- close any menu the prompt may have opened
-                            pcall(function()
-                                local pg = lp:FindFirstChild("PlayerGui")
-                                if pg then
-                                    for _, gi in ipairs(pg:GetDescendants()) do
-                                        if gi:IsA("Frame") and gi.Visible then
-                                            local n = gi.Name:lower()
-                                            if n:find("furnace",1,true) or n:find("smelt",1,true)
-                                               or n:find("craftframe",1,true) or n:find("marketframe",1,true) then
-                                                gi.Visible = false
-                                            end
-                                        end
-                                    end
-                                end
-                            end)
-                        end
-                    end
-                end
-            end
-        end
-    end
-end)
+-- (AUTO-CRAFT + AUTO-SMELT loops removed)
 
 -- ============================================================
 -- AUTO-REPAIR LOOP — equip the Repair Hammer + native Tool.Activate near the hull on a timer.
