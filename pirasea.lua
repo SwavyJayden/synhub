@@ -1723,11 +1723,13 @@ end)
 Tabs.Production:Section({ Title = "BUY FROM ANYWHERE", Opened = true })
 
 do
-    local DEFAULT_BUYS = { "Copper Ingot", "Potato", "Tomato" }
-    S.buyList = S.buyList or table.concat(DEFAULT_BUYS, ", ")
+    -- buyList is stored as a comma-separated string for back-compat with saved config.
+    -- UI is type-to-add (no pre-fill in the input box).
+    S.buyList = S.buyList or ""
     S.buyQty  = S.buyQty or 10
     S.buyAutoOn = S.buyAutoOn or false
     S.buyAutoInterval = S.buyAutoInterval or 30
+    local pendingAdd, pendingRm = "", ""
 
     local function parseList(text)
         local out = {}
@@ -1741,15 +1743,17 @@ do
     local function buyOnce(verbose)
         local pi = game:GetService("ReplicatedStorage"):FindFirstChild("comms")
         pi = pi and pi:FindFirstChild("PurchaseItem")
-        if not pi then pushLog("bad", "🛒 PurchaseItem remote missing"); return 0, 0 end
+        if not pi then pushLog("bad", "PurchaseItem remote missing"); return 0, 0 end
         local items = parseList(S.buyList)
+        if #items == 0 then
+            if verbose then pushLog("warn", "buy list is empty -- add items first") end
+            return 0, 0
+        end
         local qty = math.max(1, math.floor(tonumber(S.buyQty) or 1))
         local hits, misses, beliBefore = 0, 0, nil
         local stats = lp:FindFirstChild("Stats")
         local beli = stats and stats:FindFirstChild("Beli")
         if beli then beliBefore = beli.Value end
-        -- IMPORTANT: PurchaseItem's second arg is IGNORED by the server (it always
-        -- buys 1 per call). To get N items we have to fire N times per item.
         for _, name in ipairs(items) do
             local bought, failed = 0, 0
             for i = 1, qty do
@@ -1761,30 +1765,83 @@ do
             end
             if bought > 0 then
                 hits = hits + 1
-                if verbose then pushLog("good", string.format("🛒 +%dx %s%s", bought, name,
+                if verbose then pushLog("good", string.format("+%dx %s%s", bought, name,
                     failed > 0 and string.format(" (%d failed)", failed) or "")) end
             else
                 misses = misses + 1
-                if verbose then pushLog("warn", string.format("🛒 fail: %s (server returned false)", name)) end
+                if verbose then pushLog("warn", string.format("fail: %s", name)) end
             end
         end
         if beli and beliBefore and verbose then
-            local delta = beli.Value - beliBefore
-            pushLog("info", string.format("🛒 batch done · %d ok · %d fail · Beli %+d", hits, misses, delta))
+            pushLog("info", string.format("done -- %d ok, %d fail, Beli %+d",
+                hits, misses, beli.Value - beliBefore))
         end
         return hits, misses
     end
 
+    -- live paragraph that shows the current buy list. Refreshed after add/remove/clear.
+    local listP = Tabs.Production:Paragraph({
+        Title = "Buy list",
+        Desc  = S.buyList == "" and "(empty)" or S.buyList,
+    })
+    local function refreshList()
+        pcall(function() listP:SetDesc(S.buyList == "" and "(empty)" or S.buyList) end)
+    end
+
     Tabs.Production:Input({
-        Title = "Items to buy (comma-separated)",
-        Desc  = "Exact PurchaseItem names. Confirmed working: Copper Ingot, Potato, Tomato, Stone, Wheat.",
-        Value = S.buyList,
-        Placeholder = "Copper Ingot, Potato, Tomato",
-        Callback = function(text) S.buyList = text; saveConfig() end,
+        Title = "Item to add",
+        Desc  = "Exact PurchaseItem name. Confirmed: Copper Ingot, Potato, Tomato, Stone, Wheat.",
+        Placeholder = "Copper Ingot",
+        Callback = function(t) pendingAdd = t or "" end,
+    })
+    Tabs.Production:Button({
+        Title = "Add to list",
+        Callback = function()
+            local n = (pendingAdd or ""):gsub("^%s+", ""):gsub("%s+$", "")
+            if n == "" then pushLog("warn", "type a name first"); return end
+            local items = parseList(S.buyList)
+            for _, ex in ipairs(items) do
+                if ex:lower() == n:lower() then pushLog("info", "already in list"); return end
+            end
+            items[#items + 1] = n
+            S.buyList = table.concat(items, ", ")
+            saveConfig(); refreshList()
+            pushLog("good", "added: " .. n)
+        end,
+    })
+
+    Tabs.Production:Input({
+        Title = "Item to remove",
+        Placeholder = "(name to remove)",
+        Callback = function(t) pendingRm = t or "" end,
+    })
+    Tabs.Production:Button({
+        Title = "Remove from list",
+        Callback = function()
+            local n = (pendingRm or ""):gsub("^%s+", ""):gsub("%s+$", ""):lower()
+            if n == "" then pushLog("warn", "type a name to remove"); return end
+            local items, kept, removed = parseList(S.buyList), {}, false
+            for _, item in ipairs(items) do
+                if item:lower() == n then removed = true
+                else kept[#kept + 1] = item end
+            end
+            if not removed then pushLog("warn", "not in list"); return end
+            S.buyList = table.concat(kept, ", ")
+            saveConfig(); refreshList()
+            pushLog("good", "removed")
+        end,
+    })
+
+    Tabs.Production:Button({
+        Title = "Clear list",
+        Callback = function()
+            S.buyList = ""; saveConfig(); refreshList()
+            pushLog("info", "buy list cleared")
+        end,
     })
 
     Tabs.Production:Slider({
-        Title = "Quantity per item per buy",
+        Title = "Quantity per item",
         Value = { Min = 1, Max = 999, Default = math.clamp(S.buyQty or 10, 1, 999) },
         Step = 1,
         Callback = function(v) S.buyQty = v; saveConfig() end,
@@ -1792,18 +1849,15 @@ do
 
     Tabs.Production:Button({
         Title = "Buy once",
-        Desc  = "Runs PurchaseItem for every name in the list above. Costs Beli (you'll see the delta in the log).",
-        Callback = function()
-            task.spawn(function() buyOnce(true) end)
-        end,
+        Desc  = "Run PurchaseItem for every name in the list. Costs Beli.",
+        Callback = function() task.spawn(function() buyOnce(true) end) end,
     })
 
     Tabs.Production:Toggle({
         Title = "Auto-buy loop",
-        Desc  = "Re-runs the buy list every N seconds. Pirates the merchant network from anywhere.",
         Value = S.buyAutoOn or false,
         Callback = function(v) S.buyAutoOn = v and true or false; saveConfig()
-            pushLog(v and "warn" or "info", v and "🛒 auto-buy ON" or "🛒 auto-buy off")
+            pushLog(v and "warn" or "info", v and "auto-buy ON" or "auto-buy off")
         end,
     })
 
@@ -1948,31 +2002,6 @@ do
         end,
     })
 
-    -- ============================================================
-    -- 🎩 EquipEquipment: same no-ownership-check pattern as EquipWeapon, but
-    -- for accessories. Confirmed working for hats/cloaks/necklaces/belts.
-    -- Names taken from assets.models.Accessories.
-    -- ============================================================
-    S.equipAccessory = S.equipAccessory or "Blackbeards Hat"
-    Tabs.Production:Input({
-        Title = "Accessory name to equip",
-        Desc  = "Server doesn't ownership-check. Names: Blackbeards Hat, Marine Cloak, Black/Red Captain Cloak, Redbeaded/Goldbeaded/Blackbeaded Necklace, Yellow/Orange Swordsman Belt.",
-        Value = S.equipAccessory,
-        Placeholder = "Blackbeards Hat",
-        Callback = function(t) S.equipAccessory = t or ""; saveConfig() end,
-    })
-    Tabs.Production:Button({
-        Title = "Equip accessory",
-        Callback = function()
-            local ee = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("EquipEquipment")
-            if not ee then pushLog("bad", "🎩 EquipEquipment remote missing"); return end
-            local name = S.equipAccessory or ""
-            if name == "" then pushLog("warn", "🎩 set an accessory name first"); return end
-            local ok, ret = pcall(function() return ee:InvokeServer(name) end)
-            pushLog(ok and "good" or "bad", string.format("🎩 EquipEquipment(%q) -> %s",
-                name, ok and ("ok ret=" .. tostring(ret):sub(1, 40)) or tostring(ret)))
-        end,
-    })
 end
 
 -- ---- AUTO-SMELT (Furnace - speed mode) ----
