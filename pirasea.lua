@@ -1025,23 +1025,25 @@ _G.ENI_HELPER.Window = Window   -- escape hatch: _G.ENI_HELPER.Window:Open() fro
 
 pcall(function() Window:SetUIScale(0.85) end)
 
--- 5-tab consolidation. Code keys aliased so existing :Button/:Toggle/:Section calls
--- continue to work without touching every reference. Fight gathers combat + ESP + safety,
--- Sail gathers all travel + boat content, Gear gathers production + character, Train is
--- the grind tab, Settings is config.
+-- 7-tab layout. Code keys aliased so existing :Button/:Toggle/:Section calls keep working
+-- without touching every reference. Fight is combat-only; ESP and Movement get their own
+-- tabs (distinct mental models); Sail is boat-only; Gear is buy/craft/equip/inventory;
+-- Train is the grind; Settings absorbs Safety (watchdog + flagged is set-once config).
 local _Fight    = Window:Tab({ Title = "Fight",    Icon = "swords"       })
+local _ESP      = Window:Tab({ Title = "ESP",      Icon = "eye"          })
 local _Sail     = Window:Tab({ Title = "Sail",     Icon = "ship"         })
+local _Move     = Window:Tab({ Title = "Move",     Icon = "navigation"   })
 local _Gear     = Window:Tab({ Title = "Gear",     Icon = "shopping-bag" })
 local _Train    = Window:Tab({ Title = "Train",    Icon = "activity"     })
 local _Settings = Window:Tab({ Title = "Settings", Icon = "cog"          })
 
 local Tabs = {
     Farming    = _Fight,     -- Auto Farm   → Fight
-    Intel      = _Fight,     -- ESP         → Fight
-    Safety     = _Fight,     -- Safety      → Fight
+    Intel      = _ESP,       -- ESP         → ESP   (own tab)
+    Safety     = _Settings,  -- Safety      → Settings (folded in)
     Boat       = _Sail,      -- Sailing     → Sail
     BoatFarm   = _Sail,      -- Boat Farm   → Sail
-    Movement   = _Sail,      -- Movement    → Sail
+    Movement   = _Move,      -- Movement    → Move  (own tab)
     Production = _Gear,      -- Production  → Gear
     Character  = _Gear,      -- Character   → Gear
     Survival   = _Train,     -- Stats       → Train
@@ -3110,7 +3112,7 @@ Tabs.Movement:Button({
 -- ============================================================
 -- POI section (was its own tab pPOI -- alias of Movement)
 -- ============================================================
-Tabs.Intel:Section({ Title = "POI", Opened = false })
+Tabs.Intel:Section({ Title = "POI", Opened = true })
 
 -- POI info paragraph (updated by renderPOIs loop)
 -- // renderPOIs() updates this paragraph via
