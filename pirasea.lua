@@ -1085,20 +1085,27 @@ _G.ENI_HELPER.Window = Window   -- escape hatch: _G.ENI_HELPER.Window:Open() fro
 
 pcall(function() Window:SetUIScale(0.85) end)
 
--- Tabs. Code keys kept stable (Farming/Survival/Intel) even though display Titles changed,
--- to avoid churning every Tabs.X reference. Farming=Auto Farm (combat+mining), Boat=all boat,
--- Survival=Stats (eat/train/rum/stat readout), Intel=ESP.
+-- 5-tab consolidation. Code keys aliased so existing :Button/:Toggle/:Section calls
+-- continue to work without touching every reference. Fight gathers combat + ESP + safety,
+-- Sail gathers all travel + boat content, Gear gathers production + character, Train is
+-- the grind tab, Settings is config.
+local _Fight    = Window:Tab({ Title = "Fight",    Icon = "swords"       })
+local _Sail     = Window:Tab({ Title = "Sail",     Icon = "ship"         })
+local _Gear     = Window:Tab({ Title = "Gear",     Icon = "shopping-bag" })
+local _Train    = Window:Tab({ Title = "Train",    Icon = "activity"     })
+local _Settings = Window:Tab({ Title = "Settings", Icon = "cog"          })
+
 local Tabs = {
-    Farming    = Window:Tab({ Title = "Auto Farm",  Icon = "swords"       }),
-    Boat       = Window:Tab({ Title = "Sailing",    Icon = "ship"         }),
-    BoatFarm   = Window:Tab({ Title = "Boat Farm",  Icon = "crosshair"    }),
-    Production = Window:Tab({ Title = "Production",  Icon = "pickaxe"      }),
-    Movement   = Window:Tab({ Title = "Movement",   Icon = "navigation"   }),
-    Survival   = Window:Tab({ Title = "Stats",      Icon = "activity"     }),
-    Character  = Window:Tab({ Title = "Character",  Icon = "user-round"   }),
-    Safety     = Window:Tab({ Title = "Safety",     Icon = "shield-alert" }),
-    Intel      = Window:Tab({ Title = "ESP",        Icon = "eye"          }),
-    Settings   = Window:Tab({ Title = "Settings",   Icon = "cog"          }),
+    Farming    = _Fight,     -- Auto Farm   → Fight
+    Intel      = _Fight,     -- ESP         → Fight
+    Safety     = _Fight,     -- Safety      → Fight
+    Boat       = _Sail,      -- Sailing     → Sail
+    BoatFarm   = _Sail,      -- Boat Farm   → Sail
+    Movement   = _Sail,      -- Movement    → Sail
+    Production = _Gear,      -- Production  → Gear
+    Character  = _Gear,      -- Character   → Gear
+    Survival   = _Train,     -- Stats       → Train
+    Settings   = _Settings,  -- Settings    → Settings
 }
 Window:SelectTab(1)
 
@@ -1152,7 +1159,7 @@ local watchdogOnTog = Tabs.Safety:Toggle({
 })
 
 local watchdogAnyTog = Tabs.Safety:Toggle({
-    Title = "🚪 Trigger on ANY player join (solo-farm)",
+    Title = "Trigger on ANY player join (solo-farm)",
     Value = S.watchdogAnyPlayer,
     Callback = function(v)
         S.watchdogAnyPlayer=v
@@ -1171,7 +1178,7 @@ local watchdogAnyTog = Tabs.Safety:Toggle({
 })
 
 -- WATCHDOG ACTION (hop vs leave) -- native Dropdown so it renders inside WindUI's Section.
-Tabs.Safety:Section({ Title = "WATCHDOG ACTION", Opened = true })
+Tabs.Safety:Section({ Title = "WATCHDOG ACTION", Opened = false })
 Tabs.Safety:Paragraph({ Title = "When flagged player joins", Desc = "Choose action." })
 Tabs.Safety:Dropdown({
     Title = "Action",
@@ -1186,7 +1193,7 @@ Tabs.Safety:Dropdown({
 })
 
 -- FLAGGED PLAYERS: native WindUI widgets (guaranteed to render, no raw-frame parenting hacks)
-Tabs.Safety:Section({ Title = "FLAGGED PLAYERS", Opened = true })
+Tabs.Safety:Section({ Title = "FLAGGED PLAYERS", Opened = false })
 
 local flaggedListP   -- forward decl for the render fn below
 local flaggedRemoveDd  -- forward decl
@@ -1247,7 +1254,7 @@ renderFlagged()
 -- ============================================================
 -- WHITELIST  (never fires watchdog on these names -- friends, self alts, etc)
 -- ============================================================
-Tabs.Safety:Section({ Title = "WHITELIST (never fire on these)", Opened = true })
+Tabs.Safety:Section({ Title = "WHITELIST (never fire on these)", Opened = false })
 
 local wlListP, wlRemoveDd
 
@@ -1310,7 +1317,7 @@ renderWhitelist()
 -- WATCHDOG DIAGNOSTIC -- native WindUI buttons.
 Tabs.Safety:Section({ Title = "WATCHDOG DIAGNOSTIC" })
 Tabs.Safety:Button({
-    Title = "🧪 Test watchdog",
+    Title = "Test watchdog",
     Desc  = "Fires watchdog on self to verify kick works.",
     Callback = function()
         state.watchdog = nil
@@ -1319,7 +1326,7 @@ Tabs.Safety:Button({
     end,
 })
 Tabs.Safety:Button({
-    Title = "↻ Reset one-shot",
+    Title = "Reset one-shot",
     Desc  = "Clears session lock so watchdog can fire again.",
     Callback = function()
         state.watchdog = nil
@@ -1519,7 +1526,7 @@ state.winduiParagraphs.cbStatus = Tabs.Farming:Paragraph({ Title = "Combat statu
 Tabs.Farming:Section({ Title = "AUTO-CLASH (react to heavy hits)" })
 
 Tabs.Farming:Toggle({
-    Title = "⚔️ Enable auto-clash",
+    Title = "Enable auto-clash",
     Desc = "When a nearby opponent starts a heavy attack, instantly fire your response to clash it.",
     Value = S.autoClashOn,
     Callback = function(v) S.autoClashOn = v; saveConfig() end,
@@ -1570,7 +1577,7 @@ Tabs.Farming:Input({
 })
 
 Tabs.Farming:Toggle({
-    Title = "🧠 Smart heavy detect (any weapon)",
+    Title = "Smart heavy detect (any weapon)",
     Desc = "Detects heavies by animation PRIORITY (Action4) + LENGTH, not a fixed ID list -- catches every weapon's heavy without you adding IDs.",
     Value = S.autoClashSmart ~= false,
     Callback = function(v) S.autoClashSmart = v; saveConfig() end,
@@ -1749,7 +1756,7 @@ end
 Tabs.Production:Section({ Title = "AUTO-CRAFT (Workbench)" })
 
 Tabs.Production:Toggle({
-    Title = "🔨 Enable auto-craft",
+    Title = "Enable auto-craft",
     Value = S.autoCraftOn,
     Callback = function(v)
         S.autoCraftOn=v; pushLog(v and "good" or "warn", "🔨 auto-craft → "..tostring(v))
@@ -1792,7 +1799,7 @@ end)
 -- comms.PurchaseItem accepts InvokeServer(name, qty) from anywhere -- no merchant proximity
 -- gate. Confirmed working 2026-06-07 on Copper Ingot, Potato, Tomato, Stone, Wheat.
 -- Charges your Beli for each call. Server gracefully returns false on unknown item names.
-Tabs.Production:Section({ Title = "🛒 BUY FROM ANYWHERE", Opened = true })
+Tabs.Production:Section({ Title = "BUY FROM ANYWHERE", Opened = true })
 
 do
     local DEFAULT_BUYS = { "Copper Ingot", "Potato", "Tomato" }
@@ -1863,7 +1870,7 @@ do
     })
 
     Tabs.Production:Button({
-        Title = "🛒 Buy once",
+        Title = "Buy once",
         Desc  = "Runs PurchaseItem for every name in the list above. Costs Beli (you'll see the delta in the log).",
         Callback = function()
             task.spawn(function() buyOnce(true) end)
@@ -1871,7 +1878,7 @@ do
     })
 
     Tabs.Production:Toggle({
-        Title = "♻ Auto-buy loop",
+        Title = "Auto-buy loop",
         Desc  = "Re-runs the buy list every N seconds. Pirates the merchant network from anywhere.",
         Value = S.buyAutoOn or false,
         Callback = function(v) S.buyAutoOn = v and true or false; saveConfig()
@@ -1903,14 +1910,14 @@ do
     -- ============================================================
     S.equipWeaponName = S.equipWeaponName or "Fenrir"
     Tabs.Production:Input({
-        Title = "🗡 Weapon name to equip",
+        Title = "Weapon name to equip",
         Desc  = "Fires EquipWeapon -- server doesn't ownership-check. Free weapon.",
         Value = S.equipWeaponName,
         Placeholder = "e.g. Fenrir, Anna, Spiked Kanabo, Murasakiba",
         Callback = function(t) S.equipWeaponName = t or ""; saveConfig() end,
     })
     Tabs.Production:Button({
-        Title = "🗡 Equip weapon",
+        Title = "Equip weapon",
         Callback = function()
             local ew = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("EquipWeapon")
             if not ew then pushLog("bad", "🗡 EquipWeapon remote missing"); return end
@@ -1921,7 +1928,7 @@ do
         end,
     })
     Tabs.Production:Button({
-        Title = "🗡 Equip ALL known weapons",
+        Title = "Equip ALL known weapons",
         Desc  = "Fires EquipWeapon for every confirmed-working name in one batch.",
         Callback = function()
             task.spawn(function()
@@ -1947,14 +1954,14 @@ do
     -- ============================================================
     S.stashTarget = S.stashTarget or ""
     Tabs.Production:Input({
-        Title = "📦 Stash to dump (blank = yours)",
+        Title = "Stash to dump (blank = yours)",
         Desc  = "OpenItemStash exploit. Leave blank for your own stash; type a player name to try theirs.",
         Value = S.stashTarget,
         Placeholder = "(blank = own stash)",
         Callback = function(t) S.stashTarget = t or ""; saveConfig() end,
     })
     Tabs.Production:Button({
-        Title = "📦 Dump stash to log + file",
+        Title = "Dump stash to log + file",
         Callback = function()
             task.spawn(function()
                 local ois = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("OpenItemStash")
@@ -1992,7 +1999,7 @@ do
     -- 🛡 ClearVels: zeroes velocity server-side. Likely anti-knockback.
     -- ============================================================
     Tabs.Production:Button({
-        Title = "🛡 Clear velocity (anti-knockback)",
+        Title = "Clear velocity (anti-knockback)",
         Callback = function()
             local cv = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("ClearVels")
             if not cv then pushLog("bad", "🛡 ClearVels missing"); return end
@@ -2010,27 +2017,27 @@ do
     S.craftBulkItem = S.craftBulkItem or "Copper Nail"
     S.craftBulkQty  = S.craftBulkQty or 50
     Tabs.Production:Input({
-        Title = "🔨 Bulk craft item",
+        Title = "Bulk craft item",
         Desc  = "Any recipe name (Copper Nail, Oak Plank, Caravan, Sloop, etc). Server checks materials per call.",
         Value = S.craftBulkItem,
         Placeholder = "Copper Nail",
         Callback = function(t) S.craftBulkItem = t or ""; saveConfig() end,
     })
     Tabs.Production:Slider({
-        Title = "🔨 Bulk craft quantity",
+        Title = "Bulk craft quantity",
         Value = { Min = 1, Max = 999, Default = math.clamp(S.craftBulkQty or 50, 1, 999) },
         Step = 1,
         Callback = function(v) S.craftBulkQty = v; saveConfig() end,
     })
     S.craftBulkParallel = S.craftBulkParallel ~= false
     Tabs.Production:Toggle({
-        Title = "🔨 Parallel bulk craft (max speed)",
+        Title = "Parallel bulk craft (max speed)",
         Desc  = "ON = fire all N crafts simultaneously via task.spawn (fastest). OFF = sequential with 50ms gap (safer).",
         Value = S.craftBulkParallel,
         Callback = function(v) S.craftBulkParallel = v; saveConfig() end,
     })
     Tabs.Production:Button({
-        Title = "🔨 Bulk craft now",
+        Title = "Bulk craft now",
         Callback = function()
             task.spawn(function()
                 local cr = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("CraftRequest")
@@ -2075,14 +2082,14 @@ do
     -- ============================================================
     S.equipAccessory = S.equipAccessory or "Blackbeards Hat"
     Tabs.Production:Input({
-        Title = "🎩 Accessory name to equip",
+        Title = "Accessory name to equip",
         Desc  = "Server doesn't ownership-check. Names: Blackbeards Hat, Marine Cloak, Black/Red Captain Cloak, Redbeaded/Goldbeaded/Blackbeaded Necklace, Yellow/Orange Swordsman Belt.",
         Value = S.equipAccessory,
         Placeholder = "Blackbeards Hat",
         Callback = function(t) S.equipAccessory = t or ""; saveConfig() end,
     })
     Tabs.Production:Button({
-        Title = "🎩 Equip accessory",
+        Title = "Equip accessory",
         Callback = function()
             local ee = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("EquipEquipment")
             if not ee then pushLog("bad", "🎩 EquipEquipment remote missing"); return end
@@ -2099,7 +2106,7 @@ end
 Tabs.Production:Section({ Title = "AUTO-SMELT (Furnace - speed mode)" })
 
 Tabs.Production:Toggle({
-    Title = "🔥 Enable auto-smelt",
+    Title = "Enable auto-smelt",
     Value = S.autoSmeltOn,
     Callback = function(v)
         S.autoSmeltOn=v; pushLog(v and "good" or "warn", "🔥 auto-smelt → "..tostring(v))
@@ -2286,7 +2293,7 @@ Tabs.Survival:Dropdown({
     end,
 })
 
-Tabs.Survival:Section({ Title = "RUM", Opened = true })
+Tabs.Survival:Section({ Title = "RUM", Opened = false })
 
 do  -- drink-slot stepper (now labelled rum since this triggers on stamina)
     local rawSlot = Tabs.Survival:Section({ Title = "" })
@@ -2342,7 +2349,7 @@ end
 --   ReplicatedStorage.comms.DeleteRequest:FireServer(<item uuid>)
 -- where uuid == the inventory item instance's Name (== UI button ID.Value).
 -- ============================================================
-Tabs.Character:Section({ Title = "AUTO-DELETE ITEMS", Opened = true })
+Tabs.Character:Section({ Title = "AUTO-DELETE ITEMS", Opened = false })
 
 do  -- scope block: keep these locals out of the main-chunk 200-local ceiling
 local autoDelInfoP
@@ -2441,7 +2448,7 @@ end
 -- Every list change now requires typing the exact name.
 
 Tabs.Character:Input({
-    Title = "➕ Add item to delete-list (exact name)",
+    Title = "Add item to delete-list (exact name)",
     Value = "",
     Placeholder = "e.g. Cargo Crate, Oak Plank...",
     Callback = function(text)
@@ -2460,7 +2467,7 @@ Tabs.Character:Input({
 })
 
 Tabs.Character:Input({
-    Title = "➖ Remove item from delete-list (exact name)",
+    Title = "Remove item from delete-list (exact name)",
     Value = "",
     Placeholder = "type the name to remove...",
     Callback = function(text)
@@ -2482,7 +2489,7 @@ Tabs.Character:Input({
 })
 
 Tabs.Character:Button({
-    Title = "🧹 Clear delete-list",
+    Title = "Clear delete-list",
     Desc = "Empties the auto-delete list. Continuous toggle stays on but does nothing until you re-add items.",
     Callback = function()
         S.autoDeleteList = {}
@@ -2495,7 +2502,7 @@ Tabs.Character:Button({
 autoDelInfoP = Tabs.Character:Paragraph({ Title = "Delete status", Desc = "(none chosen)" })
 
 Tabs.Character:Button({
-    Title = "🗑️ Delete matching now (once)",
+    Title = "Delete matching now (once)",
     Desc = "Delete matching items once. Bound hotbar items skipped.",
     Callback = function()
         local set = buildDeleteSet()
@@ -2509,7 +2516,7 @@ Tabs.Character:Button({
 })
 
 Tabs.Character:Toggle({
-    Title = "♻️ Auto-delete (continuous)",
+    Title = "Auto-delete (continuous)",
     Desc = "DESTRUCTIVE. Auto-delete matching items. Empty list does nothing. Skips bound items & F8 panic.",
     Value = S.autoDeleteOn,
     Callback = function(v)
@@ -2545,7 +2552,7 @@ task.spawn(function()
 end)
 end  -- end auto-delete scope block
 
-Tabs.Character:Section({ Title = "CURRENT HOTBAR", Opened = true })
+Tabs.Character:Section({ Title = "CURRENT HOTBAR", Opened = false })
 
 -- Hotbar live-view box: kept as raw widget because the background loop at line 3811-3826
 -- writes directly to hbList.Text every 0.4s. (loop at line ~3811 updates hbList.Text -- no change needed there since hbList is still a TextLabel)
@@ -2557,7 +2564,7 @@ do
 end
 
 Tabs.Character:Button({
-    Title = "🍎 Test eat slot",
+    Title = "Test eat slot",
     Desc = "Test hunger-slot eating",
     Callback = function()
         if S.autoEatHungerSlot > 0 then eatFromSlot(S.autoEatHungerSlot, "test")
@@ -2571,7 +2578,7 @@ Tabs.Character:Button({
 Tabs.Boat:Section({ Title = "BOAT REPAIR" })
 
 Tabs.Boat:Toggle({
-    Title = "🔧 Auto-repair boat",
+    Title = "Auto-repair boat",
     Value = S.autoRepairOn,
     Callback = function(v) S.autoRepairOn=v; saveConfig() end,
 })
@@ -2584,7 +2591,7 @@ Tabs.Boat:Slider({
 })
 
 Tabs.Boat:Toggle({
-    Title = "🔩 Nail-stall fix (deletes 1-nail stacks!)",
+    Title = "Nail-stall fix (deletes 1-nail stacks!)",
     Desc = "DESTRUCTIVE: while repairing, deletes orphan 1/99 copper-nail stacks so repair can pull a full stack. Only fires if you still have a 2+ stack to fall back on.",
     Value = S.autoRepairNailFix,
     Callback = function(v) S.autoRepairNailFix=v; saveConfig() end,
@@ -2600,7 +2607,7 @@ Tabs.Boat:Toggle({
 Tabs.BoatFarm:Section({ Title = "BOAT FARM (sea encounters)", Opened = true })
 
 Tabs.BoatFarm:Toggle({
-    Title = "⚔️ Enable boat farm",
+    Title = "Enable boat farm",
     Desc = "Fights NPCs near boats, stays out of water, grips downed enemies, then loots/repairs when clear.",
     Value = S.boatFarmOn,
     Callback = function(v) S.boatFarmOn = v; saveConfig() end,
@@ -2609,14 +2616,14 @@ Tabs.BoatFarm:Toggle({
 Tabs.BoatFarm:Section({ Title = "REPAIR" })
 
 Tabs.BoatFarm:Toggle({
-    Title = "🔧 Auto-repair when clear",
+    Title = "Auto-repair when clear",
     Desc = "Repairs the hull once the encounter is fully cleared (won't fight and repair at once).",
     Value = S.boatFarmAutoRepair,
     Callback = function(v) S.boatFarmAutoRepair = v; saveConfig() end,
 })
 
 Tabs.BoatFarm:Toggle({
-    Title = "🔩 Nail-stall fix (deletes 1-nail stacks!)",
+    Title = "Nail-stall fix (deletes 1-nail stacks!)",
     Desc = "DESTRUCTIVE: deletes orphan 1/99 copper-nail stacks so repair can use a full stack. Only fires if you still have a 2+ stack.",
     Value = S.boatFarmNailFixOn,
     Callback = function(v) S.boatFarmNailFixOn = v; saveConfig() end,
@@ -2637,13 +2644,13 @@ state.winduiParagraphs.boatFarmStatus = Tabs.BoatFarm:Paragraph({ Title = "Boat 
 -- ============================================================
 do
     local Tab = Tabs.Survival
-    Tab:Section({ Title = "ARMAMENT WILL TRACKER", Opened = true })
+    Tab:Section({ Title = "ARMAMENT WILL TRACKER", Opened = false })
     state.winduiParagraphs = state.winduiParagraphs or {}
     state.winduiParagraphs.hakiTracker = Tab:Paragraph({ Title = "Haki / Will", Desc = "reading..." })
     state.hakiTrack = { baseScore = nil }
 
     Tab:Button({
-        Title = "🔄 Reset session counter",
+        Title = "Reset session counter",
         Callback = function() state.hakiTrack.baseScore = nil; pushLog("info", "haki tracker: session re-baselined") end,
     })
 
@@ -2779,7 +2786,7 @@ Tabs.Movement:Slider({
 })
 
 Tabs.Movement:Button({
-    Title = "🛑 Stop TP",
+    Title = "Stop TP",
     Callback = function()
         state.tpCancel = true
         local hum = getMyHum(); if hum then pcall(function() hum.PlatformStand = false end) end
@@ -2791,7 +2798,7 @@ Tabs.Movement:Button({
 Tabs.Boat:Section({ Title = "TP TO BOAT" })
 
 Tabs.Boat:Button({
-    Title = "🚤 TP to my boat",
+    Title = "TP to my boat",
     Callback = function()
         local ok = tpToBoat()
         pushLog(ok and "good" or "warn", ok and "🚤 TP'd to boat" or "🚤 no boat found — spawn it first")
@@ -2900,11 +2907,11 @@ do
     end
 
     Tabs.Movement:Button({
-        Title = "🔁 Same server",
+        Title = "Same server",
         Callback = function() smartRejoin(true) end,
     })
     Tabs.Movement:Button({
-        Title = "🔄 New server",
+        Title = "New server",
         Callback = function() smartRejoin(false) end,
     })
 end
@@ -3097,8 +3104,8 @@ do
     end
     _G.boat_sailer_stop = stopSail
 
-    Tabs.Boat:Button({ Title = "⛵ Sail to destination", Callback = startSail })
-    Tabs.Boat:Button({ Title = "⏹ Stop sailing", Callback = stopSail })
+    Tabs.Boat:Button({ Title = "Sail to destination", Callback = startSail })
+    Tabs.Boat:Button({ Title = "Stop sailing", Callback = stopSail })
 
     -- expose to other UI sections (e.g. Movement-tab cell-grid buttons) so they can
     -- trigger auto-sail to a named cell without duplicating the routing logic.
@@ -3149,10 +3156,10 @@ do
     end
 end
 
-Tabs.Movement:Section({ Title = "SAVED SPOTS", Opened = true })
+Tabs.Movement:Section({ Title = "SAVED SPOTS", Opened = false })
 
 Tabs.Movement:Button({
-    Title = "💾 Save current spot",
+    Title = "Save current spot",
     Callback = function()
         local ok, err = pcall(function()
             local h = getMyHRP()
@@ -3217,7 +3224,7 @@ renderSavedSpots()
 Tabs.Movement:Section({ Title = "QUICK TP" })
 
 Tabs.Movement:Button({
-    Title = "👥 TP to nearest player",
+    Title = "TP to nearest player",
     Callback = function()
         local myHrp = getMyHRP(); if not myHrp then return end
         local best, bestD = nil, math.huge
@@ -3232,7 +3239,7 @@ Tabs.Movement:Button({
 })
 
 Tabs.Movement:Button({
-    Title = "🖱 TP to mouse cursor",
+    Title = "TP to mouse cursor",
     Callback = function()
         local m = lp:GetMouse(); if m.Hit then tpTo(m.Hit.Position) end
     end,
@@ -3240,7 +3247,7 @@ Tabs.Movement:Button({
 
 -- permanent G9 / Monago Island farm spot (this place = PlaceId 92602684048559)
 Tabs.Movement:Button({
-    Title = "🏝 TP: G9 Monago (farm)",
+    Title = "TP: G9 Monago (farm)",
     Callback = function()
         pushLog("info", "🏝 gliding to G9 Monago...")
         tpTo(Vector3.new(-922.66, 25.41, 790.80))
@@ -3251,7 +3258,7 @@ Tabs.Movement:Button({
 -- ============================================================
 -- POI section (was its own tab pPOI -- alias of Movement)
 -- ============================================================
-Tabs.Intel:Section({ Title = "POI", Opened = true })
+Tabs.Intel:Section({ Title = "POI", Opened = false })
 
 -- POI info paragraph (updated by renderPOIs loop)
 -- // renderPOIs() updates this paragraph via
@@ -3263,7 +3270,7 @@ state.winduiParagraphs.poiInfo = Tabs.Intel:Paragraph({
 })
 
 Tabs.Intel:Button({
-    Title = "🔄 Rescan",
+    Title = "Rescan",
     Callback = function() refreshPOIs(); renderPOIs() end,
 })
 
@@ -3515,7 +3522,7 @@ do
     end
 
     Tabs.Character:Button({
-        Title = "📦 Sort inventory A-Z",
+        Title = "Sort inventory A-Z",
         Desc = "Sort inventory UI alphabetically.",
         Callback = function()
             local n = sortNow()
@@ -3526,7 +3533,7 @@ do
     -- optional auto-sort: re-fire whenever a new item appears or any item changes
     local autoConn
     Tabs.Character:Toggle({
-        Title = "🔁 Auto-sort on inventory change",
+        Title = "Auto-sort on inventory change",
         Desc = "Re-sort on any inventory change (slight perf cost).",
         Value = S.autoInvSort or false,
         Callback = function(v)
@@ -3685,13 +3692,13 @@ end
 -- reload, the same refactor rolls out to all 9 tabs.
 local secConfig = Tabs.Settings:Section({ Title = "Config", Icon = "cog", Opened = true })
 secConfig:Button({
-    Title = "💾 Save config now",
+    Title = "Save config now",
     Callback = function()
         saveConfig(); pushLog("good","config saved")
     end,
 })
 secConfig:Button({
-    Title = "🔄 Reset to defaults",
+    Title = "Reset to defaults",
     Desc = "Reset all settings to defaults (including saved spots, watchdog, filters).",
     Callback = function()
         for k, v in pairs(DEFAULTS) do
@@ -3714,7 +3721,7 @@ secHotkeys:Paragraph({
 -- ---------- DEBUG (collapsed) ----------
 local secDebug = Tabs.Settings:Section({ Title = "Debug", Opened = false })
 secDebug:Button({
-    Title = "📋 Dump state.log to console",
+    Title = "Dump state.log to console",
     Callback = function()
         for _, e in ipairs(state.log) do print("["..e.ts.."] "..e.lv..": "..e.t) end
     end,
