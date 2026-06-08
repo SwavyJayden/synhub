@@ -1673,49 +1673,6 @@ do  -- ore-type filter presets: Any / Copper / Stone (matched against the ore mo
     mk("Any","",0,0.34); mk("Copper","copper",0.34,0.33); mk("Stone","stone",0.67,0.33)
 end
 
--- ---- AUTO-CRAFT (Workbench) ----
-Tabs.Production:Section({ Title = "AUTO-CRAFT (Workbench)" })
-
-Tabs.Production:Toggle({
-    Title = "Enable auto-craft",
-    Value = S.autoCraftOn,
-    Callback = function(v)
-        S.autoCraftOn=v; pushLog(v and "good" or "warn", "🔨 auto-craft → "..tostring(v))
-        saveConfig()
-    end,
-})
-
-Tabs.Production:Input({
-    Title = "Craft item name",
-    Value = S.autoCraftItem or "Copper Nail",
-    Placeholder = "exact item name (e.g. Copper Nail)",
-    Callback = function(text) S.autoCraftItem=text; saveConfig() end,
-})
-
-Tabs.Production:Slider({
-    Title = "Craft every (s)",
-    Value = { Min = 1, Max = 15, Default = math.floor((S.autoCraftInterval or 2)*10)/10 },
-    Step = 0.1,
-    Callback = function(v) S.autoCraftInterval=v; saveConfig() end,
-})
-
--- state.craft is initialized at the top of the file; don't clobber it here
--- // loop below updates this paragraph
-state.winduiParagraphs.craftStatus = Tabs.Production:Paragraph({
-    Title = "Craft status",
-    Desc = "crafted: 0",
-})
-task.spawn(function()
-    while gui.Parent do
-        if state.winduiParagraphs.craftStatus then
-            state.winduiParagraphs.craftStatus:SetDesc(string.format(
-                "crafted: %d ok / %d fail   last: %s",
-                state.craft.ok, state.craft.fail, tostring(state.craft.last):sub(1,40)))
-        end
-        task.wait(0.5)
-    end
-end)
-
 -- ---- BUY FROM ANYWHERE (PurchaseItem exploit) ----
 -- comms.PurchaseItem accepts InvokeServer(name, qty) from anywhere -- no merchant proximity
 -- gate. Confirmed working 2026-06-07 on Copper Ingot, Potato, Tomato, Stone, Wheat.
@@ -1878,46 +1835,48 @@ do
     end)
 
     -- ============================================================
-    -- 🗡 EquipWeapon exploit: server doesn't verify ownership, so firing
-    --    comms.EquipWeapon:FireServer(name) equips any weapon you name.
-    --    Confirmed 2026-06-07 on: Fenrir, Anna, Spiked Kanabo, Cutlass,
-    --    Flintlock Rifle, Club, Kanabo, Murasakiba, Axe.
+    -- STASH FROM ANYWHERE: OpenItemStash returns the stash table from any
+    -- location. Blank target = your own stash. With another player's name
+    -- it MIGHT return theirs (server gating unknown).
     -- ============================================================
-    S.equipWeaponName = S.equipWeaponName or "Fenrir"
+    local pendingStash = ""
     Tabs.Production:Input({
-        Title = "Weapon name to equip",
-        Desc  = "Fires EquipWeapon -- server doesn't ownership-check. Free weapon.",
-        Value = S.equipWeaponName,
-        Placeholder = "e.g. Fenrir, Anna, Spiked Kanabo, Murasakiba",
-        Callback = function(t) S.equipWeaponName = t or ""; saveConfig() end,
+        Title = "Stash to dump",
+        Desc  = "Blank = your own. Type a player name to try theirs.",
+        Placeholder = "(blank = your own)",
+        Callback = function(t) pendingStash = t or "" end,
     })
     Tabs.Production:Button({
-        Title = "Equip weapon",
-        Callback = function()
-            local ew = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("EquipWeapon")
-            if not ew then pushLog("bad", "🗡 EquipWeapon remote missing"); return end
-            local name = S.equipWeaponName or ""
-            if name == "" then pushLog("warn", "🗡 set a weapon name first"); return end
-            local ok, err = pcall(function() ew:FireServer(name) end)
-            pushLog(ok and "good" or "bad", string.format("🗡 EquipWeapon(%q) -> %s", name, ok and "ok" or tostring(err)))
-        end,
-    })
-    Tabs.Production:Button({
-        Title = "Equip ALL known weapons",
-        Desc  = "Fires EquipWeapon for every confirmed-working name in one batch.",
+        Title = "Dump stash",
+        Desc  = "Reads stash via OpenItemStash. Writes stash_dump.log + copies to clipboard.",
         Callback = function()
             task.spawn(function()
-                local ew = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("EquipWeapon")
-                if not ew then pushLog("bad", "🗡 EquipWeapon remote missing"); return end
-                local NAMES = { "Fenrir", "Anna", "Spiked Kanabo", "Cutlass", "Flintlock Rifle",
-                                "Club", "Kanabo", "Murasakiba", "Axe" }
-                local hits = 0
-                for _, n in ipairs(NAMES) do
-                    local ok = pcall(function() ew:FireServer(n) end)
-                    if ok then hits = hits + 1 end
-                    task.wait(0.1)
+                local ois = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("OpenItemStash")
+                if not ois then pushLog("bad", "OpenItemStash remote missing"); return end
+                local target = (pendingStash ~= "" and pendingStash or nil)
+                local ok, ret = pcall(function() return ois:InvokeServer(target) end)
+                if not ok then pushLog("bad", "fail: " .. tostring(ret)); return end
+                if type(ret) ~= "table" then
+                    pushLog("warn", "unexpected return: " .. tostring(ret)); return
                 end
-                pushLog("good", string.format("🗡 equipped %d/%d weapons", hits, #NAMES))
+                local lines = { string.format("=== stash dump %s ===", target or "(self)") }
+                local function dump(t, indent)
+                    for k, v in pairs(t) do
+                        if type(v) == "table" then
+                            lines[#lines+1] = string.format("%s%s = {", indent, tostring(k))
+                            dump(v, indent .. "  ")
+                            lines[#lines+1] = indent .. "}"
+                        else
+                            lines[#lines+1] = string.format("%s%s = %s", indent, tostring(k), tostring(v))
+                        end
+                    end
+                end
+                dump(ret, "  ")
+                local text = table.concat(lines, "\n")
+                if writefile then pcall(writefile, "stash_dump.log", text) end
+                if setclipboard then pcall(setclipboard, text) end
+                local n = 0; for _ in pairs(ret) do n = n + 1 end
+                pushLog("good", string.format("stash dumped (%d top-level, %d bytes -> stash_dump.log)", n, #text))
             end)
         end,
     })
@@ -3845,22 +3804,8 @@ local function fireCraftRemote(item)
     local ok, result = pcall(function() return craftRemote:InvokeServer(item) end)
     return ok, result
 end
-task.spawn(function()
-    while gui.Parent do
-        task.wait(S.autoCraftInterval or 2)
-        if S.autoCraftOn and not state.panic then
-            local item = S.autoCraftItem or "Copper Nail"
-            local ok, result = fireCraftRemote(item)
-            if ok then
-                state.craft.ok = state.craft.ok + 1
-                state.craft.last = tostring(result == nil and "ok" or result)
-            else
-                state.craft.fail = state.craft.fail + 1
-                state.craft.last = "err: "..tostring(result):sub(1,30)
-            end
-        end
-    end
-end)
+-- (auto-craft loop removed; fireCraftRemote() retained for use by AUTO-SMELT below)
+
 -- SPEED smelt loop: short-circuits if any prerequisite fails, so we don't spam
 -- CraftRequest when there's nothing to do.  Checks in order:
 --   (a) we have a furnace within range (else skip, log "no furnace")
