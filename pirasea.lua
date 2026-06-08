@@ -1,5 +1,5 @@
 -- ============================================================
--- ENI's Sea Piece Hub — v5
+-- Hub v5
 -- ============================================================
 -- TABS:
 --   ⚔ Combat     · auto-farm (velocity-hover above NPC + Swing remote), watchdog auto-leave
@@ -15,9 +15,9 @@
 -- ============================================================
 
 -- ============================================================
--- RE-ENTRY GUARD: pirasea was loading 3 times back-to-back when Sea Piece's
+-- RE-ENTRY GUARD: the hub was loading 3 times back-to-back when Sea Piece's
 -- loadfix toggles HUD.HudClient.init (which triggers a character regen that
--- some autoexec setups treat as a "re-run pirasea" signal). Guard with a
+-- some autoexec setups treat as a "re-run the hub" signal). Guard with a
 -- TIMESTAMP not a boolean so a stuck/aborted previous load self-clears after
 -- 30s instead of locking out reloads forever.
 -- ============================================================
@@ -25,7 +25,7 @@ do
     local now = os.clock()
     local last = _G.ENI_LOADING_AT or 0
     if (now - last) < 30 then
-        warn("[ENI v5] another instance loaded <30s ago - aborting this re-execution")
+        warn("[hub] another instance loaded <30s ago - aborting this re-execution")
         return
     end
     _G.ENI_LOADING_AT = now
@@ -130,18 +130,7 @@ task.spawn(function()
     end
 end)
 
--- capture uncaught client errors so the live log never goes mysteriously silent.
--- passive listen on a standard client signal -- no remotes, nothing anti-cheat watches.
-pcall(function()
-    local SC = game:GetService("ScriptContext")
-    table.insert(_G.ENI_HELPER.connections, SC.Error:Connect(function(msg, trace, _)
-        -- only ship errors that look like they came from us, to avoid spamming on the game's own errors
-        local m = tostring(msg or "")
-        if m:find("pirasea") or m:find("ENI") or (trace and tostring(trace):find("pirasea")) then
-            shipLine("bad", "‼ ERR: " .. m)
-        end
-    end))
-end)
+-- (script-context error hook removed -- it referenced our script name in plain text)
 
 -- TRACE: raw signal stream for tuning (fly velocity, walkSpeed resets, etc).
 -- gated behind LIVE.trace so we can mute it once a feature is dialed in.
@@ -1050,26 +1039,26 @@ do
     -- Previous auto-fetch was silently overwriting a valid bundle with broken source
     -- from jsdelivr, so we removed that branch entirely.
     if not (isfile and readfile and isfile(WINDUI_CACHE)) then
-        warn("[ENI v5] windui_cache.lua missing in Wave Workspace - cannot continue. " ..
+        warn("[hub] windui_cache.lua missing in Wave Workspace - cannot continue. " ..
              "Download https://github.com/Footagesus/WindUI/releases/latest/download/main.lua and save as windui_cache.lua")
         return
     end
     local okr, src = pcall(readfile, WINDUI_CACHE)
     if not okr or type(src) ~= "string" or #src < 100000 then
-        warn(string.format("[ENI v5] windui_cache.lua is wrong size (%s bytes, expected ~250000). " ..
+        warn(string.format("[hub] windui_cache.lua is wrong size (%s bytes, expected ~250000). " ..
              "Re-download from https://github.com/Footagesus/WindUI/releases/latest/download/main.lua",
              tostring(src and #src or "<read failed>")))
         return
     end
     -- safety: refuse to run a source build (it has relative requires that break)
     if src:find('require%s*%(%s*"%./') or src:find("This is just an example") then
-        warn("[ENI v5] windui_cache.lua is the SOURCE (has relative requires) not the BUNDLE. " ..
+        warn("[hub] windui_cache.lua is the SOURCE (has relative requires) not the BUNDLE. " ..
              "Re-download from https://github.com/Footagesus/WindUI/releases/latest/download/main.lua")
         return
     end
     local okl, lib = pcall(function() return loadstring(src)() end)
     if not (okl and lib) then
-        warn("[ENI v5] WindUI loadstring failed: " .. tostring(lib))
+        warn("[hub] WindUI loadstring failed: " .. tostring(lib))
         return
     end
     WindUI = lib
@@ -1077,10 +1066,10 @@ do
 end
 
 local Window = WindUI:CreateWindow({
-    Title  = "Pirasea",
+    Title  = "Hub",
     Icon   = "swords",
-    Author = "Sea Piece · v5",
-    Folder = "Pirasea",
+    Author = "v5",
+    Folder = "Hub",
     Size   = UDim2.fromOffset(440, 320),   -- tight
     Theme  = "Dark",
     SideBarWidth = 110,                     -- minimal sidebar
@@ -1116,9 +1105,9 @@ Window:SelectTab(1)
 -- friendly load notify with the hotkey hint so you know how to recover it
 pcall(function()
     WindUI:Notify({
-        Title    = "✨ Pirasea loaded",
-        Content  = "Press RightShift to hide/show the window.",
-        Duration = 5,
+        Title    = "Loaded",
+        Content  = "RightShift to toggle.",
+        Duration = 3,
         Icon     = "anchor",
     })
 end)
@@ -1138,7 +1127,7 @@ Tabs.Safety:Section({ Title = "WATCHDOG (auto-leave)", Opened = true })
 
 -- forward-declared so the toggle setters / rescan can reference it before
 -- the actual function body (defined further down the file).
--- checkPlayerAgainstFlags hoisted at top of pirasea.lua
+-- checkPlayerAgainstFlags hoisted at top of the script
 -- helper: when a watchdog toggle flips ON, re-scan players already in the server
 -- (PlayerAdded only fires for NEW joiners, so existing players were getting a free pass).
 local function rescanForWatchdog()
@@ -1316,7 +1305,7 @@ wlRemoveDd = Tabs.Safety:Dropdown({
 
 renderWhitelist()
 
--- watchdogFire hoisted at top of pirasea.lua so this section can reference it.
+-- watchdogFire hoisted at top of the script so this section can reference it.
 
 -- WATCHDOG DIAGNOSTIC -- native WindUI buttons.
 Tabs.Safety:Section({ Title = "WATCHDOG DIAGNOSTIC" })
@@ -2925,7 +2914,7 @@ end
 -- boat through its OWN VehicleSeat input (Engine.Throttle/Steer) -- the server reads that
 -- as our input and propels the boat itself at NATURAL speed (server-validated, no anti-cheat
 -- reset, works tabbed-out). Voyage state lives in its own marker file so it survives each
--- boundary crossing via pirasea's auto-reload. Self-calibrates fwd/steer signs + the N/S axis.
+-- boundary crossing via the hub's auto-reload. Self-calibrates fwd/steer signs + the N/S axis.
 -- ============================================================
 Tabs.Boat:Section({ Title = "AUTO-SAIL" })
 do
@@ -3154,7 +3143,7 @@ do
         end
     end)
 
-    -- resume a voyage left in progress (pirasea auto-reloads in each place after a crossing)
+    -- resume a voyage left in progress (the hub auto-reloads in each place after a crossing)
     if voyage.active and voyage.dest then
         planLeg(); pushLog("info", "⛵ auto-sail resumed -> " .. tostring(voyage.dest))
     end
@@ -6682,30 +6671,23 @@ end
 local inv = findInventoryFolder()
 if inv then pushLog("info", "inventory: "..inv:GetFullName().." ("..(#inv:GetChildren())..")") end
 
-print("[ENI v5] hub loaded · RightShift hides · F8 panic · F7 snapshot")
+-- (silent load)
 
 -- ============================================================
--- PERSIST ACROSS TELEPORTS (Infinite-Yield style)
--- Re-inject the hub on the next server. The queued snippet re-reads pirasea.lua from
--- disk (so it always runs the latest version) and only loads if not already present,
--- so it never double-stacks with an autoexec. The top-of-file singleton handles cleanup
--- if it does reload over a live instance.
+-- PERSIST ACROSS TELEPORTS (queue_on_teleport)
+-- Re-inject from _G.HUB_URL if set, else does nothing. Set the URL in
+-- your autoexec to enable: _G.HUB_URL = "https://.../main/script.lua"
 -- ============================================================
 do
     local q = queue_on_teleport or (syn and syn.queue_on_teleport)
-    if q then
-        pcall(q, [[
+    if q and _G.HUB_URL then
+        pcall(q, string.format([[
             task.wait(0.5)
             if not _G.ENI_HELPER then
-                local ok, src = pcall(function() return readfile and readfile("pirasea.lua") end)
-                if ok and type(src) == "string" and #src > 0 then
-                    local fn = loadstring(src)
-                    if fn then pcall(fn) end
-                end
+                local ok, src = pcall(function() return game:HttpGet(%q) end)
+                if ok and src then local fn = loadstring(src); if fn then pcall(fn) end end
             end
-        ]])
-        pushLog("good", "🛰️ teleport-persist armed (hub re-injects on next server)")
-    else
-        pushLog("warn", "🛰️ queue_on_teleport unavailable -- hub won't auto-persist on teleport")
+        ]], _G.HUB_URL))
+        pushLog("good", "🛰️ teleport-persist armed")
     end
 end
