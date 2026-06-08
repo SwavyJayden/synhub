@@ -11,7 +11,6 @@
 -- Hotkeys (fixed; shown in Settings):
 --   RightShift  → hide/show GUI
 --   F8          → PANIC (disable everything)
---   F7          → save state snapshot (JSON dump, not an image)
 -- ============================================================
 
 -- ============================================================
@@ -76,69 +75,10 @@ local VIM = game:GetService("VirtualInputManager")
 local GuiService = game:GetService("GuiService")
 local lp = Players.LocalPlayer or Players:WaitForChild("LocalPlayer", 10)
 
--- ============================================================
--- LIVE LOG SHIPPER  (helper.lua -> Tailscale -> Mac collector -> ENI)
--- Batched (1 HTTP call/sec max), fully pcall-wrapped: a dead
--- collector can NEVER stall the game. Fire-and-forget.
--- ============================================================
-local LIVE = {
-    url   = "http://100.96.81.127:8787/log",
-    token = "eni-live",
-    on    = true,
-    trace = true,   -- ship raw fly/eat/walkspeed traces; mute by flipping to false
-    q     = {},
-    failStreak = 0,
-}
--- resolve the executor's http function once
-local _httpReq = (syn and syn.request) or (http and http.request) or http_request or request
-local function _ship(url, body)
-    if not _httpReq then return false end
-    local ok = pcall(function()
-        _httpReq({
-            Url = url, Method = "POST",
-            Headers = { ["Content-Type"]="text/plain", ["X-Token"]=LIVE.token },
-            Body = body,
-        })
-    end)
-    return ok
-end
--- enqueue a single line (called from pushLog)
-local function shipLine(level, msg)
-    if not LIVE.on then return end
-    LIVE.q[#LIVE.q + 1] = "[" .. tostring(level) .. "] " .. tostring(msg)
-end
--- background flusher: drains the queue once a second. Dies on reload: each load installs a fresh
--- _G.ENI_HELPER (line ~46), so the OLD flusher's captured handle stops matching and it exits
--- (the old `while true` leaked one zombie thread per reload -- bug #8).
-task.spawn(function()
-    local myHelper = _G.ENI_HELPER
-    while _G.ENI_HELPER == myHelper do
-        task.wait(1.0)
-        if LIVE.on and #LIVE.q > 0 and _httpReq then
-            local batch = LIVE.q
-            LIVE.q = {}
-            local body = table.concat(batch, "\n")
-            local ok = _ship(LIVE.url, body)
-            if ok then
-                LIVE.failStreak = 0
-            else
-                LIVE.failStreak = LIVE.failStreak + 1
-                -- after 10 straight failures, stop trying (collector down) to save cycles
-                if LIVE.failStreak >= 10 then LIVE.on = false end
-            end
-        end
-    end
-end)
-
--- (script-context error hook removed -- it referenced our script name in plain text)
-
--- TRACE: raw signal stream for tuning (fly velocity, walkSpeed resets, etc).
--- gated behind LIVE.trace so we can mute it once a feature is dialed in.
-local function shipTrace(s)
-    if LIVE.on and LIVE.trace then
-        LIVE.q[#LIVE.q + 1] = "[trace] " .. tostring(s)
-    end
-end
+-- (LIVE log shipper + trace removed -- no longer pinging an external collector)
+local LIVE = { on = false, trace = false }
+local function shipLine() end
+local function shipTrace() end
 
 -- ============================================================
 -- THEME
@@ -247,7 +187,7 @@ local DEFAULTS = {
     -- Minimap (top-down, player-locked rotation, center of screen)
     mapOn=false, mapRange=1500, mapSize=220,
     -- Hotkeys (rebindable)
-    keyHideGui="RightShift", keyPanic="F8", keyScreenshot="F7",
+    keyHideGui="RightShift", keyPanic="F8",
 }
 
 local S = {}
@@ -1312,27 +1252,8 @@ wlRemoveDd = Tabs.Safety:Dropdown({
 
 renderWhitelist()
 
+-- (watchdog diagnostic section removed; test/reset buttons were one-time setup tools)
 -- watchdogFire hoisted at top of the script so this section can reference it.
-
--- WATCHDOG DIAGNOSTIC -- native WindUI buttons.
-Tabs.Safety:Section({ Title = "WATCHDOG DIAGNOSTIC" })
-Tabs.Safety:Button({
-    Title = "Test watchdog",
-    Desc  = "Fires watchdog on self to verify kick works.",
-    Callback = function()
-        state.watchdog = nil
-        if watchdogFire then watchdogFire(lp, "TEST")
-        else pushLog("bad","watchdogFire not loaded yet") end
-    end,
-})
-Tabs.Safety:Button({
-    Title = "Reset one-shot",
-    Desc  = "Clears session lock so watchdog can fire again.",
-    Callback = function()
-        state.watchdog = nil
-        pushLog("info","watchdog one-shot reset")
-    end,
-})
 
 -- ============================================================
 -- COMBAT TAB  (legacy "Spam attack key" + rebindable hotkey were cut;
@@ -1948,54 +1869,6 @@ do
     })
 
     -- ============================================================
-    -- 📦 OpenItemStash exploit: returns the stash contents table from
-    --    anywhere. With no arg returns YOUR stash. With a player name
-    --    arg, MIGHT return that player's stash (server gating unknown).
-    -- ============================================================
-    S.stashTarget = S.stashTarget or ""
-    Tabs.Production:Input({
-        Title = "Stash to dump (blank = yours)",
-        Desc  = "OpenItemStash exploit. Leave blank for your own stash; type a player name to try theirs.",
-        Value = S.stashTarget,
-        Placeholder = "(blank = own stash)",
-        Callback = function(t) S.stashTarget = t or ""; saveConfig() end,
-    })
-    Tabs.Production:Button({
-        Title = "Dump stash to log + file",
-        Callback = function()
-            task.spawn(function()
-                local ois = RS:FindFirstChild("comms") and RS.comms:FindFirstChild("OpenItemStash")
-                if not ois then pushLog("bad", "📦 OpenItemStash remote missing"); return end
-                local target = S.stashTarget ~= "" and S.stashTarget or nil
-                local ok, ret = pcall(function() return ois:InvokeServer(target) end)
-                if not ok then pushLog("bad", "📦 fail: " .. tostring(ret)); return end
-                if type(ret) ~= "table" then
-                    pushLog("warn", "📦 unexpected return: " .. tostring(ret)); return
-                end
-                -- recursive dump
-                local lines = { string.format("=== stash dump %s ===", target or "(self)") }
-                local function dump(t, indent)
-                    for k, v in pairs(t) do
-                        if type(v) == "table" then
-                            lines[#lines+1] = string.format("%s%s = {", indent, tostring(k))
-                            dump(v, indent .. "  ")
-                            lines[#lines+1] = indent .. "}"
-                        else
-                            lines[#lines+1] = string.format("%s%s = %s", indent, tostring(k), tostring(v))
-                        end
-                    end
-                end
-                dump(ret, "  ")
-                local text = table.concat(lines, "\n")
-                if writefile then pcall(writefile, "stash_dump.log", text) end
-                if setclipboard then pcall(setclipboard, text) end
-                pushLog("good", string.format("📦 stash dumped (%d entries top-level, %d bytes -> stash_dump.log)",
-                    (function() local n=0; for _ in pairs(ret) do n=n+1 end; return n end)(), #text))
-            end)
-        end,
-    })
-
-    -- ============================================================
     -- 🛡 ClearVels: zeroes velocity server-side. Likely anti-knockback.
     -- ============================================================
     Tabs.Production:Button({
@@ -2562,15 +2435,6 @@ do
     local hbBox=Instance.new("Frame",parent); hbBox.Size=UDim2.new(1,0,0,200); hbBox.BackgroundColor3=C.bg2; hbBox.BorderSizePixel=0; corner(hbBox,8); pad(hbBox,8)
     hbList=lbl(hbBox,"",10,C.textDim,Enum.Font.Code); hbList.Size=UDim2.new(1,0,1,0); hbList.TextYAlignment=Enum.TextYAlignment.Top
 end
-
-Tabs.Character:Button({
-    Title = "Test eat slot",
-    Desc = "Test hunger-slot eating",
-    Callback = function()
-        if S.autoEatHungerSlot > 0 then eatFromSlot(S.autoEatHungerSlot, "test")
-        else pushLog("warn","set hotbar slot first") end
-    end,
-})
 
 -- ============================================================
 -- BOAT REPAIR
@@ -3713,19 +3577,10 @@ secConfig:Button({
 local secHotkeys = Tabs.Settings:Section({ Title = "Hotkeys", Opened = false })
 secHotkeys:Paragraph({
     Title = "Hotkeys",
-    Desc = string.format(
-        "  Hide GUI: %s\n  Panic: %s\n  Screenshot: %s",
-        S.keyHideGui, S.keyPanic, S.keyScreenshot),
+    Desc = string.format("  Hide GUI: %s\n  Panic: %s", S.keyHideGui, S.keyPanic),
 })
 
--- ---------- DEBUG (collapsed) ----------
-local secDebug = Tabs.Settings:Section({ Title = "Debug", Opened = false })
-secDebug:Button({
-    Title = "Dump state.log to console",
-    Callback = function()
-        for _, e in ipairs(state.log) do print("["..e.ts.."] "..e.lv..": "..e.t) end
-    end,
-})
+-- (settings Debug section removed)
 
 
 
@@ -6644,18 +6499,6 @@ table.insert(_G.ENI_HELPER.connections, UIS.InputBegan:Connect(function(input, p
             pushLog("bad", "🚨 PANIC — everything disabled")
         else
             pushLog("good", "panic cleared")
-        end
-    elseif kn == S.keyScreenshot then
-        if writefile then
-            -- can't actually screenshot from script, but dump current state
-            pcall(function()
-                writefile("eni_screenshot_"..os.time()..".json",
-                    HttpService:JSONEncode({
-                        ts=os.time(), pos=(getMyHRP() and {getMyHRP().Position.X, getMyHRP().Position.Y, getMyHRP().Position.Z} or nil),
-                        log=state.log
-                    }))
-            end)
-            pushLog("info", "state snapshot saved")
         end
     end
 end))
