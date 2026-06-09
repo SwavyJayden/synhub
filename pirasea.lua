@@ -3118,18 +3118,46 @@ do
         L6 = 71949223456527,  L7 = 83162626861136,  L8 = 94307337961182,  L9 = 115311690324483,
     }
 
+    -- Full cross-place TeleportService:Teleport attempt with thread-identity elevation
+    -- to 8 (CoreScript), same pattern smartRejoin uses for same-server rejoin.  Sea Piece
+    -- currently walls cross-place TPs with error 773 "Cannot teleport without a valid
+    -- teleport token", but the call is logged + the one-shot TeleportInitFailed listener
+    -- surfaces the exact error so we can spot any change in the engine policy.
     local function tpToCell(cellName)
-        if not CELL_PLACE[cellName] then
-            pushLog("warn", "🗺 unknown cell: " .. tostring(cellName)); return
-        end
-        if CELL_PLACE[cellName] == game.PlaceId then
-            pushLog("info", "🗺 already in " .. cellName); return
-        end
-        if _G.ENI_AUTO_SAIL and _G.ENI_AUTO_SAIL.sailTo then
-            _G.ENI_AUTO_SAIL.sailTo(cellName)
-        else
-            pushLog("bad", "🗺 AUTO-SAIL not ready -- check Sail tab loaded")
-        end
+        local placeId = CELL_PLACE[cellName]
+        if not placeId then pushLog("warn", "🗺 unknown cell: " .. tostring(cellName)); return end
+        if placeId == game.PlaceId then pushLog("info", "🗺 already in " .. cellName); return end
+        pushLog("info", string.format("🌐 TP -> %s (placeId=%d)", cellName, placeId))
+        pcall(function()
+            local TS = game:GetService("TeleportService")
+            -- one-shot failure listener (auto-disconnects after fire or 8s timeout)
+            local conn
+            conn = TS.TeleportInitFailed:Connect(function(player, result, errMsg)
+                if player == lp then
+                    pushLog("bad", string.format("🌐 walled: result=%s err=%s",
+                        tostring(result), tostring(errMsg)))
+                    if conn then conn:Disconnect(); conn = nil end
+                end
+            end)
+            table.insert(_G.ENI_HELPER.connections, conn)
+            task.delay(8, function() if conn then pcall(function() conn:Disconnect() end); conn = nil end end)
+            -- elevate thread identity for the call so the engine sees a "trusted" caller
+            local oldId
+            if getthreadidentity and setthreadidentity then
+                local okGet, id = pcall(getthreadidentity)
+                if okGet then oldId = id end
+                pcall(setthreadidentity, 8)
+            else
+                pushLog("warn", "🌐 setthreadidentity unavailable -- trying anyway")
+            end
+            local tpOk, tpErr = pcall(function() TS:Teleport(placeId, lp) end)
+            if oldId and setthreadidentity then pcall(setthreadidentity, oldId) end
+            if tpOk then
+                pushLog("info", "🌐 TS dispatch ok -- waiting for engine response")
+            else
+                pushLog("bad", "🌐 TS threw: " .. tostring(tpErr))
+            end
+        end)
     end
 
     local ROWS = {
