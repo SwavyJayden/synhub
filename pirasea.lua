@@ -176,6 +176,7 @@ local DEFAULTS = {
     boatFarmOn=false, boatFarmRadius=10000, boatFarmAvoidWater=true, boatFarmVoidY=-300,
     boatFarmGripAfterKills=true, boatFarmGripRange=30,
     boatFarmLootChests=false, boatFarmLootKeyword="", boatFarmLootRadius=10000,
+    boatFarmLootOwnBoat=true,   -- include your own boat's crates in the loot scan (needed when farming on your ship)
     autoLootOn=false, autoLootInterval=2.0,   -- standalone auto-loot loop, runs independent of boat-farm
     boatFarmAutoRepair=true, boatFarmNailFixOn=false,
     -- Minimap (top-down, player-locked rotation, center of screen)
@@ -370,6 +371,12 @@ end
 -- ============================================================
 local function getMyHRP() return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") end
 local function getMyHum() return lp.Character and lp.Character:FindFirstChildOfClass("Humanoid") end
+
+-- Forward-declare BF (boat-farm namespace) at chunk scope.  The actual methods are
+-- attached later (around line ~3950) but the AUTO-LOOT toggle callbacks reference BF.loot
+-- earlier in the file; without this hoist they resolved BF as a global (nil) at call time
+-- and silently failed under pcall.  Real bug: auto-loot was broken since first edit.
+local BF = {}
 
 -- Populate state.promptCache via DescendantAdded/Removing listeners so all auto-loot loops
 -- (ground-loot, deer-hardcode, future boat-prompt scanners) share one O(1)-lookup table
@@ -1423,7 +1430,19 @@ Tabs.Farming:Section({ Title = "AUTO-LOOT" })
 Tabs.Farming:Toggle({
     Title = "Enable auto-loot",
     Value = S.autoLootOn,
-    Callback = function(v) S.autoLootOn = v; S.boatFarmLootChests = v; saveConfig() end,
+    Callback = function(v)
+        S.autoLootOn = v; S.boatFarmLootChests = v; saveConfig()
+        -- Fire one verbose pass immediately so the user sees WHY it found 0 targets
+        -- (own boat skipped, out of range, wrong name match, etc.) instead of silent no-op.
+        if v then task.spawn(function() pcall(function() BF.loot({ verbose = true, ignoreGate = true }) end) end) end
+    end,
+})
+
+Tabs.Farming:Toggle({
+    Title = "Include your own boat",
+    Desc  = "ON = loot crates on your own ship too (default).  OFF = only enemy/NPC boats.",
+    Value = S.boatFarmLootOwnBoat ~= false,
+    Callback = function(v) S.boatFarmLootOwnBoat = v and true or false; saveConfig() end,
 })
 
 Tabs.Farming:Input({
@@ -1440,6 +1459,12 @@ Tabs.Farming:Slider({
     Callback = function(v) S.autoLootInterval = v; saveConfig() end,
 })
 
+Tabs.Farming:Button({
+    Title = "Loot now (verbose)",
+    Desc  = "Fire one verbose loot pass.  Logs scan stats so you can see exactly why targets succeed/fail.",
+    Callback = function() task.spawn(function() pcall(function() BF.loot({ verbose = true, ignoreGate = true }) end) end) end,
+})
+
 -- Boat-loot loop (scans other players' boats for crates/barrels via BF.loot).
 -- Kept for boat-farm scenarios; gated on S.boatFarmLootChests which the toggle also sets.
 task.spawn(function()
@@ -1451,60 +1476,6 @@ task.spawn(function()
     end
 end)
 
--- GROUND-LOOT loop: fires every nearby loot-style ProximityPrompt (dead NPC bodies,
--- chests, barrels, crates).  This is what users expect when they enable "auto-loot"
--- after killing things on land or sea.  Uses the shared promptCache populated later
--- in the file; if the cache hasn't been built yet (load order), falls back to a
--- workspace scan on the first tick.
-do
-    local LOOT_NAMES = {
-        "deer","pirate","marine","bandit","npc","mob","enemy",
-        "body","drop","loot","collect","gather","pick",
-        "chest","treasure","barrel","crate","cargo","stash",
-    }
-    local function isLootPrompt(prompt)
-        local part = prompt.Parent
-        if not part or not part:IsA("BasePart") then return false end
-        local cur = part
-        while cur and cur.Parent do
-            local n = cur.Name:lower()
-            for _, kw in ipairs(LOOT_NAMES) do
-                if n:find(kw, 1, true) then return true, part.Position end
-            end
-            if cur.Parent == Workspace then break end
-            cur = cur.Parent
-        end
-        return false
-    end
-    task.spawn(function()
-        local lastFired = setmetatable({}, {__mode = "k"})
-        local LOOT_RANGE_SQ = 50 * 50
-        local function tickOnce()
-            if not (S.autoLootOn and not state.panic and type(fireproximityprompt) == "function") then return end
-            local hrp = getMyHRP(); if not hrp then return end
-            local pos = hrp.Position
-            local now = os.clock()
-            for prompt in pairs(state.promptCache) do
-                if prompt and prompt.Parent and prompt.Enabled then
-                    local ok, partPos = isLootPrompt(prompt)
-                    if ok then
-                        local dx, dy, dz = partPos.X-pos.X, partPos.Y-pos.Y, partPos.Z-pos.Z
-                        if dx*dx + dy*dy + dz*dz < LOOT_RANGE_SQ then
-                            if (now - (lastFired[prompt] or 0)) > 1.5 then
-                                lastFired[prompt] = now
-                                pcall(fireproximityprompt, prompt)
-                            end
-                        end
-                    end
-                end
-            end
-        end
-        while gui.Parent do
-            pcall(tickOnce)
-            task.wait(math.max(0.4, (S.autoLootInterval or 2.0) * 0.5))
-        end
-    end)
-end
 
 Tabs.Farming:Section({ Title = "STATUS" })
 state.winduiParagraphs = state.winduiParagraphs or {}
@@ -3926,7 +3897,8 @@ end)
 -- 200-local-per-function ceiling. The auto-farm loop below calls into these when
 -- S.boatFarmOn: water avoidance, boat-proximity targeting, grip, loot, repair.
 -- ============================================================
-local BF = {}
+-- BF is hoisted to chunk scope earlier (so AUTO-LOOT callbacks can see it).  Methods
+-- below attach to the SAME table; don't redeclare local BF = {} here (would shadow).
 do
     -- WATER: replicate the player's OWN swim trigger (mined from ClientCore:926-941).
     -- waterY = -1 + WaveMath.GetHeight(pos, serverTime, WaveConfig.Current); you are IN water
@@ -4078,7 +4050,10 @@ do
             local ps = struct.Parent
             local owner = ps and ps.Parent
             if not owner then stats.ownerSkip = stats.ownerSkip + 1; return end
-            if owner.Name == lp.Name then stats.ownBoat = stats.ownBoat + 1; return end
+            -- Own-boat skip is opt-out; default lets you loot your own ship's crates after a farm cycle.
+            if owner.Name == lp.Name and not S.boatFarmLootOwnBoat then
+                stats.ownBoat = stats.ownBoat + 1; return
+            end
             targets[#targets + 1] = { struct = struct, prim = prim, owner = owner.Name, dist = d }
         end
         for _, boat in ipairs(boats:GetChildren()) do
