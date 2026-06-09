@@ -3095,6 +3095,72 @@ Tabs.Movement:Button({
 })
 
 -- ============================================================
+-- WORLD MAP GRID -- 8x4 cell grid (E-L × 6-9) + Intro lobby.  Each cell is a separate
+-- Roblox PlaceId.  Cross-place TeleportService is blocked at the engine level (error 773
+-- "Cannot teleport without a valid teleport token") and forced PivotTo boat-warp triggers
+-- anti-cheat.  The ONLY token-legal cross is natural-speed sailing, so the buttons hand
+-- off to _G.ENI_AUTO_SAIL.sailTo(cell) which BFS-routes via the VehicleSeat input.
+-- Multi-hop, no extra clicks; just spawn a boat first via the wharf.
+-- ============================================================
+do
+    -- PlaceIds hardcoded from decompiled ReplicatedStorage.ZoneMap (inlined here so script
+    -- load doesn't have to require() the module, which causes a sandbox yield in some
+    -- executor configs that orphans the rest of init).
+    local CELL_PLACE = {
+        Intro = 82911192694516,
+        E6 = 87333997488918,  E7 = 94735842122158,  E8 = 135149977644802, E9 = 84328774303460,
+        F6 = 98429171179239,  F7 = 120836024733286, F8 = 85037315896097,  F9 = 81185830380074,
+        G6 = 94891483590233,  G7 = 120351085201689, G8 = 88034922419019,  G9 = 92602684048559,
+        H6 = 128294848301298, H7 = 105874432950359, H8 = 77240726919437,  H9 = 117623571089862,
+        I6 = 109836324483015, I7 = 131917552838334, I8 = 81032878997312,  I9 = 91465263212327,
+        J6 = 127124021271593, J7 = 120345987662187, J8 = 96615740741396,  J9 = 140470868753031,
+        K6 = 88846782392615,  K7 = 118865540163823, K8 = 123084659137343, K9 = 100632943430805,
+        L6 = 71949223456527,  L7 = 83162626861136,  L8 = 94307337961182,  L9 = 115311690324483,
+    }
+
+    local function tpToCell(cellName)
+        if not CELL_PLACE[cellName] then
+            pushLog("warn", "🗺 unknown cell: " .. tostring(cellName)); return
+        end
+        if CELL_PLACE[cellName] == game.PlaceId then
+            pushLog("info", "🗺 already in " .. cellName); return
+        end
+        if _G.ENI_AUTO_SAIL and _G.ENI_AUTO_SAIL.sailTo then
+            _G.ENI_AUTO_SAIL.sailTo(cellName)
+        else
+            pushLog("bad", "🗺 AUTO-SAIL not ready -- check Sail tab loaded")
+        end
+    end
+
+    local ROWS = {
+        { num = "6", cells = {"E6","F6","G6","H6","I6","J6","K6","L6"} },
+        { num = "7", cells = {"E7","F7","G7","H7","I7","J7","K7","L7"} },
+        { num = "8", cells = {"E8","F8","G8","H8","I8","J8","K8","L8"} },
+        { num = "9", cells = {"E9","F9","G9","H9","I9","J9","K9","L9"} },
+    }
+    Tabs.Movement:Section({ Title = "🗺 WORLD MAP TP", Opened = false })
+    for _, row in ipairs(ROWS) do
+        Tabs.Movement:Section({ Title = "Row " .. row.num, Opened = false })
+        for _, cell in ipairs(row.cells) do
+            local pid = CELL_PLACE[cell]
+            if pid then
+                local label = cell
+                if pid == game.PlaceId then label = cell .. "  (here)" end
+                Tabs.Movement:Button({
+                    Title = "🌐 " .. label,
+                    Callback = function() tpToCell(cell) end,
+                })
+            end
+        end
+    end
+    Tabs.Movement:Section({ Title = "Other", Opened = false })
+    Tabs.Movement:Button({
+        Title = "🏛 Intro / Lobby",
+        Callback = function() tpToCell("Intro") end,
+    })
+end
+
+-- ============================================================
 -- POI section -- belongs on Move (Movement) tab, not ESP. It's nearest-NPC location
 -- intel for travel decisions, not entity rendering. Re-routed to Tabs.Movement.
 -- ============================================================
