@@ -274,7 +274,7 @@ local function loadConfig()
     -- these never load from saved config — they always boot OFF, so nothing auto-runs on load
     local TRANSIENT = {flyOn=true, noClip=true,
                        autoFarmOn=true, autoEatOn=true, espOn=true, espOre=true, espPrompts=true,
-                       autoMineOn=true, autoLootOn=true, buyAutoOn=true,
+                       autoMineOn=true, autoLootOn=true,
                        -- autoRepairOn is intentionally NOT transient: it's safe (only patches your
                        -- own hull) and nice to keep ON across reloads / zone-hops, per request.
                        watchdogOn=true, panic=true,
@@ -1813,8 +1813,13 @@ do
     Tabs.Production:Toggle({
         Title = "Auto-buy loop",
         Value = S.buyAutoOn or false,
-        Callback = function(v) S.buyAutoOn = v and true or false; saveConfig()
+        Callback = function(v)
+            S.buyAutoOn = v and true or false; saveConfig()
             pushLog(v and "warn" or "info", v and "auto-buy ON" or "auto-buy off")
+            -- Fire one verbose buy immediately so the user sees the result instead of
+            -- waiting the full interval and wondering if it's working.  Empty list / no
+            -- Beli / unknown item all surface in this single log line.
+            if v then task.spawn(function() buyOnce(true) end) end
         end,
     })
 
