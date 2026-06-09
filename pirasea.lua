@@ -182,6 +182,9 @@ local DEFAULTS = {
     mapOn=false, mapRange=1500, mapSize=220,
     -- Hotkeys (rebindable)
     keyHideGui="RightShift", keyPanic="F8",
+    -- Buy + Bulk craft persistence (audit-added; were assigned via `S.X = S.X or` fallbacks at use sites)
+    buyList="", buyQty=10, buyAutoOn=false, buyAutoInterval=30,
+    craftBulkItem="Copper Nail", craftBulkQty=50, craftBulkParallel=true,
 }
 
 local S = {}
@@ -271,7 +274,7 @@ local function loadConfig()
     -- these never load from saved config — they always boot OFF, so nothing auto-runs on load
     local TRANSIENT = {flyOn=true, noClip=true,
                        autoFarmOn=true, autoEatOn=true, espOn=true, espOre=true, espPrompts=true,
-                       autoMineOn=true,
+                       autoMineOn=true, autoLootOn=true, buyAutoOn=true,
                        -- autoRepairOn is intentionally NOT transient: it's safe (only patches your
                        -- own hull) and nice to keep ON across reloads / zone-hops, per request.
                        watchdogOn=true, panic=true,
@@ -447,20 +450,26 @@ local function tpTo(pos)
         local delta = target - hrp.Position
         local dist = delta.Magnitude
         if dist < 5 then break end
-        bv.Velocity = delta.Unit * math.clamp(dist * 4, 60, S.tpGlideSpeed)   -- cap = "TP glide speed" slider
+        -- guard against bv being destroyed if character respawns mid-glide
+        if bv and bv.Parent then
+            bv.Velocity = delta.Unit * math.clamp(dist * 4, 60, S.tpGlideSpeed)   -- cap = "TP glide speed" slider
+        else
+            break
+        end
         task.wait()
     end
-    bv.Velocity = Vector3.zero            -- stop pushing so we settle at the target (no overshoot)
+    if bv and bv.Parent then bv.Velocity = Vector3.zero end   -- stop pushing so we settle at the target
     task.wait(0.15)                       -- brief settle before collision returns
     pcall(function() ncConn:Disconnect() end)
     -- restore solid ONLY if no other system still wants noclip. A TP detour during auto-farm /
     -- boat-farm (BF.loot / BF.repair call tpTo mid-run) must NOT re-solidify the character, or it
     -- snags on the hull/terrain the farm is noclipping through until the main Stepped loop re-clears.
-    if not (S.noClip or S.autoFarmOn or S.autoMineOn or S.boatFarmOn) then
+    -- fly mode also relies on noclip + PlatformStand, so don't tear those down mid-flight.
+    if not (S.noClip or S.autoFarmOn or S.autoMineOn or S.boatFarmOn or S.flyOn) then
         for p in pairs(savedCol) do if p and p.Parent then pcall(function() p.CanCollide = true end) end end
     end
     pcall(function() bv:Destroy() end)
-    pcall(function() if hum then hum.PlatformStand = false end end)
+    pcall(function() local freshHum = getMyHum(); if freshHum and not S.flyOn then freshHum.PlatformStand = false end end)
     pcall(function() local hrp = getMyHRP(); if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end end)
     return true
 end
@@ -1707,7 +1716,7 @@ do
                 if ok and ret == true then bought = bought + 1
                 else failed = failed + 1 end
                 task.wait(0.05)
-                if S.panic then break end
+                if state.panic then break end
             end
             if bought > 0 then
                 hits = hits + 1
@@ -1745,6 +1754,8 @@ do
         Callback = function()
             local n = (pendingAdd or ""):gsub("^%s+", ""):gsub("%s+$", "")
             if n == "" then pushLog("warn", "type a name first"); return end
+            -- commas are the list delimiter; reject them in names to prevent silent corruption
+            if n:find(",", 1, true) then pushLog("warn", "item names cannot contain commas"); return end
             local items = parseList(S.buyList)
             for _, ex in ipairs(items) do
                 if ex:lower() == n:lower() then pushLog("info", "already in list"); return end
@@ -1937,7 +1948,7 @@ do
                     while pending > 0 and (os.clock() - t0) < 30 do task.wait(0.05) end
                 else
                     for i = 1, qty do
-                        if S.panic then break end
+                        if state.panic then break end
                         local pcOk, ret = pcall(function() return cr:InvokeServer(name) end)
                         if pcOk and ret == true then ok = ok + 1 else fail = fail + 1 end
                         task.wait(0.05)
@@ -3034,26 +3045,27 @@ Tabs.Movement:Button({
 })
 
 -- ============================================================
--- POI section (was its own tab pPOI -- alias of Movement)
+-- POI section -- belongs on Move (Movement) tab, not ESP. It's nearest-NPC location
+-- intel for travel decisions, not entity rendering. Re-routed to Tabs.Movement.
 -- ============================================================
-Tabs.Intel:Section({ Title = "POI", Opened = true })
+Tabs.Movement:Section({ Title = "POI", Opened = true })
 
 -- POI info paragraph (updated by renderPOIs loop)
 -- // renderPOIs() updates this paragraph via
 -- // state.winduiParagraphs.poiInfo:SetDesc(...)
 state.winduiParagraphs = state.winduiParagraphs or {}
-state.winduiParagraphs.poiInfo = Tabs.Intel:Paragraph({
+state.winduiParagraphs.poiInfo = Tabs.Movement:Paragraph({
     Title = "POI info",
     Desc = "scanning...",
 })
 
-Tabs.Intel:Button({
+Tabs.Movement:Button({
     Title = "Rescan",
     Callback = function() refreshPOIs(); renderPOIs() end,
 })
 
 -- POI dynamic list container (raw frame parented to a spacer section's Frame)
-local poiSlot = Tabs.Intel:Section({ Title = "" })
+local poiSlot = Tabs.Movement:Section({ Title = "" })
 local poiContainer = Instance.new("Frame")
 poiContainer.Size = UDim2.new(1, 0, 0, 0)
 poiContainer.AutomaticSize = Enum.AutomaticSize.Y
@@ -3241,9 +3253,9 @@ do  -- live inventory counter: type a name, see total stacks + sum (fills the cu
                         stacks = stacks + 1; total = total + (it.stack or 1)
                     end
                 end
-                resultP:SetDesc(string.format("'%s' -> %d stack(s), %d total", term, stacks, total))
+                pcall(function() resultP:SetDesc(string.format("'%s' -> %d stack(s), %d total", term, stacks, total)) end)
             else
-                resultP:SetDesc("type an item name above")
+                pcall(function() resultP:SetDesc("type an item name above") end)
             end
             task.wait(0.5)
         end
@@ -3371,7 +3383,7 @@ do  -- live character stats (incl. HakiPotential) — fills the cut Home tab
                     if v ~= nil then lines[#lines+1] = string.format("%-16s %s", sn, fmt(v)) end
                 end
             end
-            statsP:SetDesc(#lines > 0 and table.concat(lines, "\n") or "no Stats folder found")
+            pcall(function() statsP:SetDesc(#lines > 0 and table.concat(lines, "\n") or "no Stats folder found") end)
             task.wait(1)
         end
     end)
@@ -3457,7 +3469,7 @@ do
                         tostring(crw or "—"):sub(1,12), tostring(zn or "?"))
                 end
             end
-            outP:SetDesc(table.concat(lines, "\n"))
+            pcall(function() outP:SetDesc(table.concat(lines, "\n")) end)
             task.wait(1)
         end
     end)
@@ -3488,7 +3500,7 @@ secConfig:Button({
 })
 
 -- ---------- HOTKEYS (collapsed) ----------
-local secHotkeys = Tabs.Settings:Section({ Title = "Hotkeys", Opened = false })
+local secHotkeys = Tabs.Settings:Section({ Title = "Hotkeys", Opened = true })
 secHotkeys:Paragraph({
     Title = "Hotkeys",
     Desc = string.format("  Hide GUI: %s\n  Panic: %s", S.keyHideGui, S.keyPanic),
@@ -4174,7 +4186,7 @@ task.spawn(function()
         -- straight above (no lateral offset -- that would shove the drop point off the deck edge).
         local strikePos
         if S.boatFarmOn then
-            strikePos = th.Position + Vector3.new(0, math.max(S.autoFarmHeight or 3, 4), 0)
+            strikePos = th.Position + Vector3.new(0, math.max(tonumber(S.autoFarmHeight) or 3, 4), 0)
         else
             -- Z offset: positive = behind mob (along -LookVector), negative = in front, 0 = on top.
             -- X offset: positive = mob's right, negative = mob's left.
@@ -4183,7 +4195,7 @@ task.spawn(function()
             strikePos = th.Position
                       + (-mobCF.LookVector) * zOff
                       + mobCF.RightVector   * xOff
-                      + Vector3.new(0, S.autoFarmHeight or 1, 0)
+                      + Vector3.new(0, tonumber(S.autoFarmHeight) or 1, 0)
         end
         if waterFloor and strikePos.Y < waterFloor then
             strikePos = Vector3.new(strikePos.X, waterFloor, strikePos.Z)
@@ -4765,10 +4777,11 @@ local function setupDeathListener(char)
     if not char then return end
     local h = char:FindFirstChildOfClass("Humanoid")
     if not h then return end
-    -- record last pos before death
+    -- record last pos before death.  Loop also exits when gui.Parent goes nil so a script reload
+    -- doesn't orphan one of these per reload (was leaking N zombie threads per reload).
     local lastPosTimer
     lastPosTimer = task.spawn(function()
-        while char.Parent do
+        while char.Parent and gui.Parent do
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if hrp then S.lastDeathPos = {hrp.Position.X, hrp.Position.Y, hrp.Position.Z} end
             task.wait(2)
@@ -4787,9 +4800,10 @@ table.insert(_G.ENI_HELPER.connections, lp.CharacterAdded:Connect(function(char)
     if S.autoFarmOn then
         pcall(function() lp.Character.ClientCore["Server.cc"].comms.remotes.FightStance:InvokeServer(true) end)
     end
-    if S.tpOnDeath and S.lastDeathPos then
+    if S.tpOnDeath and type(S.lastDeathPos) == "table"
+        and tonumber(S.lastDeathPos[1]) and tonumber(S.lastDeathPos[2]) and tonumber(S.lastDeathPos[3]) then
         task.wait(1)
-        tpTo(Vector3.new(S.lastDeathPos[1], S.lastDeathPos[2], S.lastDeathPos[3]))
+        tpTo(Vector3.new(tonumber(S.lastDeathPos[1]), tonumber(S.lastDeathPos[2]), tonumber(S.lastDeathPos[3])))
         pushLog("good","TP'd back after death")
     end
 end))
@@ -6232,6 +6246,7 @@ table.insert(_G.ENI_HELPER.connections, UIS.InputBegan:Connect(function(input, p
             pushLog("bad","🚨 PANIC key pressed — killing autofarm")
             S.autoFarmOn=false; S.autoMineOn=false; S.autoEatOn=false; S.autoRepairOn=false; S.noClip=false; S.espOn=false; S.autoMedOn=false
             S.boatFarmOn=false; S.autoClashOn=false; S.autoRumOn=false; S.autoDeleteOn=false
+            S.flyOn=false; S.buyAutoOn=false; S.autoLootOn=false; S.watchdogOn=false
             pushLog("bad", "🚨 PANIC — everything disabled")
         else
             pushLog("good", "panic cleared")
