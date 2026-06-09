@@ -3160,28 +3160,9 @@ do
         end)
     end
 
-    local ROWS = {
-        { num = "6", cells = {"E6","F6","G6","H6","I6","J6","K6","L6"} },
-        { num = "7", cells = {"E7","F7","G7","H7","I7","J7","K7","L7"} },
-        { num = "8", cells = {"E8","F8","G8","H8","I8","J8","K8","L8"} },
-        { num = "9", cells = {"E9","F9","G9","H9","I9","J9","K9","L9"} },
-    }
+    -- Cell-grid buttons removed (cross-place TS walled with error 773).  Intro/Lobby
+    -- kept because it's a different placeId class and worth trying as escape hatch.
     Tabs.Movement:Section({ Title = "🗺 WORLD MAP TP", Opened = false })
-    for _, row in ipairs(ROWS) do
-        Tabs.Movement:Section({ Title = "Row " .. row.num, Opened = false })
-        for _, cell in ipairs(row.cells) do
-            local pid = CELL_PLACE[cell]
-            if pid then
-                local label = cell
-                if pid == game.PlaceId then label = cell .. "  (here)" end
-                Tabs.Movement:Button({
-                    Title = "🌐 " .. label,
-                    Callback = function() tpToCell(cell) end,
-                })
-            end
-        end
-    end
-    Tabs.Movement:Section({ Title = "Other", Opened = false })
     Tabs.Movement:Button({
         Title = "🏛 Intro / Lobby",
         Callback = function() tpToCell("Intro") end,
