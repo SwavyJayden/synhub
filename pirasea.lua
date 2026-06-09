@@ -206,6 +206,9 @@ local state = {
     },
     panic=false,
     logFilter="all",  -- all/good/warn/bad/info
+    -- Shared ProximityPrompt cache.  Populated below by DescendantAdded listeners so the
+    -- two auto-loot loops (ground + deer hardcode) don't each walk Workspace.GetDescendants().
+    promptCache = {},
 }
 -- expose state + settings to external probes (auto-dump scripts, console debug, etc).
 -- safe: this is the hub's own helper table, already created above for connection bookkeeping.
@@ -367,6 +370,21 @@ end
 -- ============================================================
 local function getMyHRP() return lp.Character and lp.Character:FindFirstChild("HumanoidRootPart") end
 local function getMyHum() return lp.Character and lp.Character:FindFirstChildOfClass("Humanoid") end
+
+-- Populate state.promptCache via DescendantAdded/Removing listeners so all auto-loot loops
+-- (ground-loot, deer-hardcode, future boat-prompt scanners) share one O(1)-lookup table
+-- instead of walking Workspace:GetDescendants() every tick.
+do
+    for _, d in ipairs(Workspace:GetDescendants()) do
+        if d:IsA("ProximityPrompt") then state.promptCache[d] = true end
+    end
+    table.insert(_G.ENI_HELPER.connections, Workspace.DescendantAdded:Connect(function(d)
+        if d:IsA("ProximityPrompt") then state.promptCache[d] = true end
+    end))
+    table.insert(_G.ENI_HELPER.connections, Workspace.DescendantRemoving:Connect(function(d)
+        if state.promptCache[d] then state.promptCache[d] = nil end
+    end))
+end
 -- The boat we're CURRENTLY on (seated in OR standing on) -- so auto-repair works on a CREW boat,
 -- not just our own. Falls back to our owned boat (workspace.Boats[name]).
 local function currentBoat()
@@ -1422,7 +1440,8 @@ Tabs.Farming:Slider({
     Callback = function(v) S.autoLootInterval = v; saveConfig() end,
 })
 
--- standalone auto-loot loop. Hardcoded 10000-stud scan radius via boatFarmLootRadius.
+-- Boat-loot loop (scans other players' boats for crates/barrels via BF.loot).
+-- Kept for boat-farm scenarios; gated on S.boatFarmLootChests which the toggle also sets.
 task.spawn(function()
     while gui.Parent do
         if S.autoLootOn and not state.panic then
@@ -1431,6 +1450,61 @@ task.spawn(function()
         task.wait(math.max(1, S.autoLootInterval or 2.0))
     end
 end)
+
+-- GROUND-LOOT loop: fires every nearby loot-style ProximityPrompt (dead NPC bodies,
+-- chests, barrels, crates).  This is what users expect when they enable "auto-loot"
+-- after killing things on land or sea.  Uses the shared promptCache populated later
+-- in the file; if the cache hasn't been built yet (load order), falls back to a
+-- workspace scan on the first tick.
+do
+    local LOOT_NAMES = {
+        "deer","pirate","marine","bandit","npc","mob","enemy",
+        "body","drop","loot","collect","gather","pick",
+        "chest","treasure","barrel","crate","cargo","stash",
+    }
+    local function isLootPrompt(prompt)
+        local part = prompt.Parent
+        if not part or not part:IsA("BasePart") then return false end
+        local cur = part
+        while cur and cur.Parent do
+            local n = cur.Name:lower()
+            for _, kw in ipairs(LOOT_NAMES) do
+                if n:find(kw, 1, true) then return true, part.Position end
+            end
+            if cur.Parent == Workspace then break end
+            cur = cur.Parent
+        end
+        return false
+    end
+    task.spawn(function()
+        local lastFired = setmetatable({}, {__mode = "k"})
+        local LOOT_RANGE_SQ = 50 * 50
+        local function tickOnce()
+            if not (S.autoLootOn and not state.panic and type(fireproximityprompt) == "function") then return end
+            local hrp = getMyHRP(); if not hrp then return end
+            local pos = hrp.Position
+            local now = os.clock()
+            for prompt in pairs(state.promptCache) do
+                if prompt and prompt.Parent and prompt.Enabled then
+                    local ok, partPos = isLootPrompt(prompt)
+                    if ok then
+                        local dx, dy, dz = partPos.X-pos.X, partPos.Y-pos.Y, partPos.Z-pos.Z
+                        if dx*dx + dy*dy + dz*dz < LOOT_RANGE_SQ then
+                            if (now - (lastFired[prompt] or 0)) > 1.5 then
+                                lastFired[prompt] = now
+                                pcall(fireproximityprompt, prompt)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        while gui.Parent do
+            pcall(tickOnce)
+            task.wait(math.max(0.4, (S.autoLootInterval or 2.0) * 0.5))
+        end
+    end)
+end
 
 Tabs.Farming:Section({ Title = "STATUS" })
 state.winduiParagraphs = state.winduiParagraphs or {}
@@ -5720,27 +5794,13 @@ task.spawn(function()
 end)
 
 -- ============================================================
--- AUTO-LOOT LOOP  (no UI -- tied to autofarm: on when autofarm is on)
+-- DEER-AUTOLOOT LOOP  (no UI -- tied to autofarm: on when autofarm is on)
 -- Pairs with autofarm: kill deer -> body drops the F-to-collect prompt -> we fire it.
 -- ONLY fires prompts whose ancestor chain contains one of AUTO_LOOT_TARGETS.
--- PERF: maintains a listener-based cache of all ProximityPrompts in the world so we
--- don't walk Workspace:GetDescendants() every 0.4s (a multi-thousand instance scan).
+-- Shares state.promptCache with the user-facing AUTO-LOOT ground-loot loop.
 -- ============================================================
 local AUTO_LOOT_TARGETS = { "deer" }
 local AUTO_LOOT_RANGE = 30
--- live prompt cache populated via DescendantAdded / DescendantRemoving
-local promptCache = {}   -- {[ProximityPrompt]=true}
-do
-    for _, d in ipairs(Workspace:GetDescendants()) do
-        if d:IsA("ProximityPrompt") then promptCache[d] = true end
-    end
-    table.insert(_G.ENI_HELPER.connections, Workspace.DescendantAdded:Connect(function(d)
-        if d:IsA("ProximityPrompt") then promptCache[d] = true end
-    end))
-    table.insert(_G.ENI_HELPER.connections, Workspace.DescendantRemoving:Connect(function(d)
-        if promptCache[d] then promptCache[d] = nil end
-    end))
-end
 task.spawn(function()
     local lastFired = {}
     setmetatable(lastFired, {__mode = "k"})
@@ -5752,7 +5812,7 @@ task.spawn(function()
                 local pos = hrp.Position
                 local rangeSq = AUTO_LOOT_RANGE * AUTO_LOOT_RANGE
                 local now = os.clock()
-                for d, _ in pairs(promptCache) do
+                for d, _ in pairs(state.promptCache) do
                     if d.Parent and d.Enabled then
                         -- whitelist check: walk up from prompt, match ANY ancestor name
                         local matched = false
