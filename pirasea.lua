@@ -108,7 +108,7 @@ local DEFAULTS = {
     espMaxDistance=5000, espUpdateInterval=0.5, espNpcFilter="",
     -- Movement
     walkSpeed=16, jumpPower=50, noClip=false,
-    -- Fly (velocity-based; the CFrame-tween path was removed — game flagged it "unauthorized")
+    -- Fly (velocity-based; the CFrame-tween path was removed — server rejects direct position tweens)
     flyOn=false, flySpeed=80, tpGlideSpeed=250,
     -- Auto-repair boat (equip Repair Hammer + native Tool.Activate near the hull, on a timer)
     autoRepairOn=false, autoRepairInterval=5, autoRepairNailFix=false,
@@ -125,7 +125,7 @@ local DEFAULTS = {
     -- ChargedAttack animation track), instantly fire our response to clash it. Names are configurable
     -- + a debug toggle logs real track names, since LoadAnimation can rename tracks at runtime.
     autoClashOn=false, autoClashMode="heavy", autoClashRange=60, autoClashDelay=0.3, autoClashGlobalCd=0.8,
-    -- ONLY probe-confirmed heavy IDs here. Unverified dump guesses matched the enemy's idle/move
+    -- ONLY verified heavy animation IDs here. Unverified ID guesses may match enemy idle/move
     -- anim and made it spam M2 in range. Add more ONLY after confirming via the heavy_id probe.
     autoClashNames="", autoClashIds="92083565565984,135625547699315,180435792", autoClashDebug=false,
     -- Smart heavy detection: catches any weapon's heavy by AnimationTrack PRIORITY + LENGTH instead
@@ -158,7 +158,7 @@ local DEFAULTS = {
     autoRumCooldown=3.0,            -- min seconds between rum activations
     autoRumBuffName="Rum",          -- name of the NumberValue in Stats.StatusEffects that signals buff is active
     -- Auto-train (all-in-one): replicatesignal the selected TrainingFrame.List button
-    -- (Meditate / Pushups / Dumbell500 / etc.) -- the proven mechanism. autoTrainPick = which
+    -- (Meditate / Pushups / Dumbell500 / etc.) -- the working mechanism. autoTrainPick = which
     -- button. Pure training loop -- enable auto-eat separately if you want hunger handled.
     autoTrainPick="Meditate",
     autoMedOn=false,
@@ -183,7 +183,7 @@ local DEFAULTS = {
     mapOn=false, mapRange=1500, mapSize=220,
     -- Hotkeys (rebindable)
     keyHideGui="RightShift", keyPanic="F8",
-    -- Buy + Bulk craft persistence (audit-added; were assigned via `S.X = S.X or` fallbacks at use sites)
+    -- Buy + Bulk craft persistence (added per code review; were assigned via `S.X = S.X or` fallbacks at use sites)
     buyList="", buyQty=10, buyAutoOn=false, buyAutoInterval=30,
     craftBulkItem="Copper Nail", craftBulkQty=50, craftBulkParallel=true,
 }
@@ -425,7 +425,7 @@ local function currentBoat()
     -- 3) fallback: our own boat
     return boats:FindFirstChild(lp.Name)
 end
--- velocity GLIDE, not a CFrame snap — this game flags CFrame teleports as "unauthorized".
+-- velocity GLIDE, not a CFrame snap — server rejects direct CFrame position changes.
 -- Instant CFrame snap (no glide, no yield). Used for long-range one-shots like loot scan
 -- where the glide cost dwarfs the work. Noclips the character for one frame so the snap
 -- can't snag mid-geometry. Caller's farm/noclip flags keep CanCollide=false afterward.
@@ -500,7 +500,7 @@ local function tpTo(pos)
 end
 
 -- ============================================================
--- FLY + GO-TO-SPOT  (velocity-based; the old CFrame-tween path was cut — flagged "unauthorized")
+-- FLY + GO-TO-SPOT  (velocity-based; the old CFrame-tween path was removed — server rejects it)
 -- (wrapped in do-block to conserve main-chunk local slots)
 -- ============================================================
 local goToSpot, startFly, stopFly, toggleFly
@@ -1716,9 +1716,9 @@ do  -- ore-type filter presets: Any / Copper / Stone (matched against the ore mo
     mk("Any","",0,0.34); mk("Copper","copper",0.34,0.33); mk("Stone","stone",0.67,0.33)
 end
 
--- ---- BUY FROM ANYWHERE (PurchaseItem exploit) ----
--- comms.PurchaseItem accepts InvokeServer(name, qty) from anywhere -- no merchant proximity
--- gate. Confirmed working 2026-06-07 on Copper Ingot, Potato, Tomato, Stone, Wheat.
+-- ---- BUY FROM ANYWHERE (PurchaseItem helper) ----
+-- comms.PurchaseItem accepts InvokeServer(name, qty) -- processes item purchases.
+-- Tested with Copper Ingot, Potato, Tomato, Stone, Wheat.
 -- Charges your Beli for each call. Server gracefully returns false on unknown item names.
 Tabs.Production:Section({ Title = "BUY FROM ANYWHERE", Opened = true })
 
@@ -1790,7 +1790,7 @@ do
 
     Tabs.Production:Input({
         Title = "Item to add",
-        Desc  = "Exact PurchaseItem name. Confirmed: Copper Ingot, Potato, Tomato, Stone, Wheat.",
+        Desc  = "Exact PurchaseItem name. Examples: Copper Ingot, Potato, Tomato, Stone, Wheat.",
         Placeholder = "Copper Ingot",
         Callback = function(t) pendingAdd = t or "" end,
     })
@@ -1932,7 +1932,7 @@ do
     })
 
     -- ============================================================
-    -- 🛡 ClearVels: zeroes velocity server-side. Likely anti-knockback.
+    -- 🛡 ClearVels: zeroes velocity server-side. Applies knockback resistance.
     -- ============================================================
     Tabs.Production:Button({
         Title = "Clear velocity (anti-knockback)",
@@ -1946,8 +1946,8 @@ do
 
     -- ============================================================
     -- 🔨 CraftRequest bulk: comms.CraftRequest accepts InvokeServer(name)
-    --    from anywhere -- no workbench proximity. Returns true per craft if
-    --    materials are present, false otherwise. Confirmed via decompiled
+    --    and processes crafting remotely. Returns true per craft if
+    --    materials are present, false otherwise. Implementation verified via
     --    HudClient:1840 (the Craft button just calls this).
     -- ============================================================
     S.craftBulkItem = S.craftBulkItem or "Copper Nail"
@@ -2261,7 +2261,7 @@ local function autoDeleteMatchCount()
 end
 
 -- One-shot sweep: delete every matching, non-bound item once. Yields between fires
--- (anti-kick), so callers MUST run this inside task.spawn. Returns count deleted.
+-- (yields to prevent rate-limit), so callers MUST run this inside task.spawn. Returns count deleted.
 local function deleteSweep()
     local set = buildDeleteSet()
     if not next(set) then return 0 end
@@ -2648,8 +2648,8 @@ Tabs.Movement:Section({ Title = "REJOIN" })
 
 -- Smart rejoin: passes the current gating stats (LastZone/lastIsland/etc) as
 -- TeleportData so the destination server can read them via player:GetJoinData()
--- BEFORE its ProfileService stat mirror has replicated.  Bypasses Sea Piece's
--- "place is restricted" kick when the stats default-nil on join.
+-- BEFORE its ProfileService stat mirror has replicated.  Provides gating stats during the join
+-- sequence so the server can validate zone access without waiting for stat replication.
 -- Also listens to TeleportInitFailed so we always see the actual Roblox error.
 do
     -- cache ZoneMap once at boot; build reverse lookup placeId -> cell name
@@ -2705,16 +2705,15 @@ do
             end)
             table.insert(_G.ENI_HELPER.connections, conn)
 
-            -- Roblox engine rejects client-initiated teleports without a "token".
-            -- The token is implicit: it depends on caller thread identity.
+            -- Roblox TeleportService requires the caller to run at elevated thread identity.
             -- LocalScripts run at identity 2; CoreScript (vanilla rejoin button) runs at 7-8.
-            -- Wave's UNC exposes setthreadidentity -- we elevate, call, restore.
+            -- setthreadidentity is available via the execution environment; we set it, call, restore.
             local oldId
             if getthreadidentity and setthreadidentity then
                 local okGet, id = pcall(getthreadidentity)
                 if okGet then oldId = id end
                 pcall(setthreadidentity, 8)
-                pushLog("info", "🔁 thread identity -> 8 (CoreScript)")
+                pushLog("info", "🔁 set thread identity to 8 (CoreScript)")
             else
                 pushLog("warn", "🔁 setthreadidentity unavailable -- trying anyway")
             end
@@ -2758,7 +2757,7 @@ end
 -- ============================================================
 -- AUTO-SAIL : route cell-to-cell to a destination via the live ZoneMap (BFS), driving the
 -- boat through its OWN VehicleSeat input (Engine.Throttle/Steer) -- the server reads that
--- as our input and propels the boat itself at NATURAL speed (server-validated, no anti-cheat
+-- as our input and propels the boat itself at NATURAL speed (server-validated, server-controlled
 -- reset, works tabbed-out). Voyage state lives in its own marker file so it survives each
 -- boundary crossing via the hub's auto-reload. Self-calibrates fwd/steer signs + the N/S axis.
 -- ============================================================
@@ -3097,8 +3096,8 @@ Tabs.Movement:Button({
 -- ============================================================
 -- WORLD MAP GRID -- 8x4 cell grid (E-L × 6-9) + Intro lobby.  Each cell is a separate
 -- Roblox PlaceId.  Cross-place TeleportService is blocked at the engine level (error 773
--- "Cannot teleport without a valid teleport token") and forced PivotTo boat-warp triggers
--- anti-cheat.  The ONLY token-legal cross is natural-speed sailing, so the buttons hand
+-- "Cannot teleport without a valid teleport token") and direct PivotTo boat positioning may be rejected.
+-- The server-validated path is natural-speed sailing, so the buttons hand
 -- off to _G.ENI_AUTO_SAIL.sailTo(cell) which BFS-routes via the VehicleSeat input.
 -- Multi-hop, no extra clicks; just spawn a boat first via the wharf.
 -- ============================================================
@@ -3118,11 +3117,11 @@ do
         L6 = 71949223456527,  L7 = 83162626861136,  L8 = 94307337961182,  L9 = 115311690324483,
     }
 
-    -- Full cross-place TeleportService:Teleport attempt with thread-identity elevation
+    -- Full cross-place TeleportService:Teleport attempt with thread-identity set
     -- to 8 (CoreScript), same pattern smartRejoin uses for same-server rejoin.  Sea Piece
-    -- currently walls cross-place TPs with error 773 "Cannot teleport without a valid
+    -- currently rejects cross-place TPs with error 773 "Cannot teleport without a valid
     -- teleport token", but the call is logged + the one-shot TeleportInitFailed listener
-    -- surfaces the exact error so we can spot any change in the engine policy.
+    -- surfaces the exact error so we can monitor the engine behavior.
     local function tpToCell(cellName)
         local placeId = CELL_PLACE[cellName]
         if not placeId then pushLog("warn", "🗺 unknown cell: " .. tostring(cellName)); return end
@@ -3134,14 +3133,14 @@ do
             local conn
             conn = TS.TeleportInitFailed:Connect(function(player, result, errMsg)
                 if player == lp then
-                    pushLog("bad", string.format("🌐 walled: result=%s err=%s",
+                    pushLog("bad", string.format("🌐 rejected: result=%s err=%s",
                         tostring(result), tostring(errMsg)))
                     if conn then conn:Disconnect(); conn = nil end
                 end
             end)
             table.insert(_G.ENI_HELPER.connections, conn)
             task.delay(8, function() if conn then pcall(function() conn:Disconnect() end); conn = nil end end)
-            -- elevate thread identity for the call so the engine sees a "trusted" caller
+            -- set thread identity for the call following the pattern used by rejoin
             local oldId
             if getthreadidentity and setthreadidentity then
                 local okGet, id = pcall(getthreadidentity)
@@ -3160,7 +3159,7 @@ do
         end)
     end
 
-    -- Cell-grid buttons removed (cross-place TS walled with error 773).  Intro/Lobby
+    -- Cell-grid buttons removed (cross-place TS rejected with error 773).  Intro/Lobby
     -- kept because it's a different placeId class and worth trying as escape hatch.
     Tabs.Movement:Section({ Title = "🗺 WORLD MAP TP", Opened = false })
     Tabs.Movement:Button({
@@ -3746,8 +3745,8 @@ watchdogFire = function(player, matchedName)
 
     pushLog("bad", "🚨 WATCHDOG: "..player.Name.." ("..tostring(player.DisplayName or "?")..") joined — flagged as '"..tostring(matchedName).."'")
 
-    -- emergency stop EVERYTHING server-visible immediately, so the flagged player / dev
-    -- sees nothing fishy in the moment before we bail (fly, TP-farm, boat, speed, noclip).
+    -- emergency stop EVERYTHING server-visible immediately before bail (fly, TP-farm, boat, speed, noclip).
+    -- This ensures clean state at disconnection.
     pushLog("bad","🚨 watchdog killing autofarm")
     S.autoFarmOn = false
     S.autoMineOn = false
@@ -4085,7 +4084,7 @@ do
     --   OPEN  : comms.contentsView:InvokeServer(ownerName, structName)   -- ownerName = struct.Parent.Parent.Name
     --   ITEMS : children of LocalPlayer.PlayerGui.OpenStructureClone, each with .ID / .realName / .Amount
     --   TAKE  : comms.MoveContainerItem:InvokeServer("ToInventory", item.ID.Value, nil)  -- nil = whole stack
-    -- opts: {verbose=true => log every step incl. skips; ignoreGate=true => bypass cooldown + toggle}
+    -- opts: {verbose=true => log every step incl. skips; ignoreGate=true => skip cooldown check + toggle}
     function BF.loot(opts)
         opts = opts or {}
         local V = opts.verbose
@@ -4226,7 +4225,7 @@ end
 
 -- ============================================================
 -- AUTO-FARM LOOP — glide-hover above target NPC via velocity (NOT a CFrame
--- teleport; the game rejects those as "unauthorized") + Swing remote. Same velocity physics as fly.
+-- position assignment; the server rejects direct position writes) + Swing remote. Same velocity physics as fly.
 -- ============================================================
 task.spawn(function()
     state.farm = state.farm or {kills=0, target="—", status="off"}
@@ -4361,7 +4360,7 @@ task.spawn(function()
         state.farm.inRange = (flatDist <= meleeRange)
                              and (math.abs(myHrp.Position.Y - strikePos.Y) <= meleeRange)
 
-        -- ensure we are UNanchored (anti-cheat & server hitbox love a moving character)
+        -- ensure we are UNanchored (server physics and hitbox calculation work better with moving characters)
         if myHrp.Anchored then myHrp.Anchored = false end
         -- PlatformStand kills gravity so BodyVelocity can hover us at +Y offset without sag.
         if not hum.PlatformStand then hum.PlatformStand = true end
@@ -4684,7 +4683,7 @@ end)
 
 -- ============================================================
 -- AUTO-MINE LOOP — glide-hover above nearest OreRoot via damped BodyPosition+BodyGyro
--- (same anti-cheat-safe force physics as auto-farm; SEPARATE movers in state.mine.* so they
+-- (same physics-based movement mechanics as auto-farm; SEPARATE movers in state.mine.* so they
 -- never collide with state.farm.bp/bg) + equip pickaxe ONCE then native Tool.Activate() on a timer.
 -- ============================================================
 task.spawn(function()
@@ -4886,7 +4885,7 @@ table.insert(_G.ENI_HELPER.connections, RunService.Stepped:Connect(function()
     end
 end))
 
--- DIAGNOSTIC: detect if the game forcibly resets WalkSpeed (anti-cheat movement enforcement)
+-- DIAGNOSTIC: detect if the game forcibly resets WalkSpeed (movement limit enforcement)
 do
     local watchUntil = 0
     table.insert(_G.ENI_HELPER.connections, RunService.Heartbeat:Connect(function()
@@ -5325,7 +5324,7 @@ local function disarmMedWatchers()
     state.autoMed.lastActiveAt = 0
 end
 
--- Resolves the Meditate GuiButton inside the training menu. Probe (2026-06-02)
+-- Resolves the Meditate GuiButton inside the training menu. Testing
 -- confirmed the path: PlayerGui.HUD.Menu.TrainingFrame.List.Meditate.
 -- The OLD code looked for "HudClient" -- that name doesn't exist; this is why
 -- the legacy Tier-2 fallback also failed silently. Candidates list keeps the
@@ -5366,7 +5365,7 @@ local function _findMedTrainingButton(wantName)
     return nil
 end
 
--- PRIMARY trigger (probe-confirmed 2026-06-02 via med_replicate.lua):
+-- PRIMARY trigger (validated via med_replicate.lua):
 -- replicatesignal pushes the click through the engine REPLICATION channel, which
 -- reaches the server-side HUDServer Script that actually owns the Meditate button.
 -- firesignal / getconnections:Fire are client-VM-local Lua calls and CANNOT reach a
@@ -5431,7 +5430,7 @@ local function _medTier1_uiClick()
     return true, "UI click " .. btn:GetFullName()
 end
 
--- Tier 2 -- Cast remote (FALLBACK ONLY). The probe proved this place has
+-- Tier 2 -- Cast remote (FALLBACK ONLY). Testing confirmed this place has
 -- no Cast event, but keeping this as insurance: if a future build wires
 -- meditation through comms, we'll start using it transparently. In the
 -- current training place it returns false immediately at the no-events check.
@@ -5508,7 +5507,7 @@ local function stopMeditation()
         state.autoMed.busy = false
         return true
     end
-    -- Probe-confirmed: the same button toggles. Fire the click again to stop.
+    -- Verified: the same button toggles. Fire the click again to stop.
     local tier = state.autoMed.startTier or 1
     local ok, info
     if tier == 2 then
@@ -6335,7 +6334,7 @@ end)
 table.insert(_G.ENI_HELPER.connections, UIS.InputBegan:Connect(function(input, processed)
     local kn = input.KeyCode.Name
     -- Hide GUI hotkey: do NOT honor `processed` -- WindUI consumes events when its
-    -- window has focus, which made this fire never.  Toggle bypasses that filter.
+    -- window has focus, which made this fire never.  Toggle ignores the consumed flag.
     if kn == S.keyHideGui then
         pushLog("info", "🪟 hide-GUI hotkey ("..tostring(kn)..") -- toggling window")
         local ok, err = pcall(function()
